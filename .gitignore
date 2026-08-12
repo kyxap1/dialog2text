@@ -1,6 +1,8 @@
 .env
 .envrc
 .venv/
-input/
+input/*
+!input/.gitkeep
 models/
-output/
+output/*
+!output/.gitkeep
