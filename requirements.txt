@@ -95,7 +95,7 @@ SQLAlchemy==2.0.52
 sympy==1.14.0
 threadpoolctl==3.6.0
 tiktoken==0.13.0
-tokenizers==0.22.2
+tokenizers==0.23.1
 torch==2.8.0
 torch-audiomentations==0.12.0
 torch_pitch_shift==1.2.5
