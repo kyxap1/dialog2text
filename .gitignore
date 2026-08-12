@@ -1,0 +1,6 @@
+.env
+.envrc
+.venv/
+input/
+models/
+output/
