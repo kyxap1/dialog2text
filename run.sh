@@ -12,9 +12,11 @@ fi
 
 LANGUAGE=${LANGUAGE:-ru}
 SPEAKERS=${SPEAKERS:-2}
-MODEL=${MODEL:-large-v3}
-FORMAT=${FORMAT:-all}
+#MODEL=${MODEL:-large-v3}
+MODEL=${MODEL:-parakeet-v3}
+FORMAT=${FORMAT:-txt}
 OUTPUT_DIR=${OUTPUT_DIR:-output}
+HF_TOKEN=${HF_TOKEN:?}
 
 if [ "$#" -eq 0 ]; then
   shopt -s nullglob
@@ -33,10 +35,19 @@ for file in "$@"; do
   out="$OUTPUT_DIR/${name%.*}"
   mkdir -p "$out"
   echo "==> $name"
-  .venv/bin/whispermlx "$file" \
-    --model "$MODEL" --language "$LANGUAGE" \
-    --model_dir models --output_dir "$out" --output_format "$FORMAT" \
-    --diarize --min_speakers "$SPEAKERS" --max_speakers "$SPEAKERS"
+  if [[ "$MODEL" == parakeet* ]]; then
+    .venv/bin/python parakeet_transcribe.py "$file" \
+      --hf_token "$HF_TOKEN" \
+      --model "$MODEL" \
+      --model_dir models --output_dir "$out" --output_format "$FORMAT" \
+      --diarize --min_speakers "$SPEAKERS" --max_speakers "$SPEAKERS"
+  else
+    .venv/bin/whispermlx "$file" \
+      --hf_token "$HF_TOKEN" \
+      --model "$MODEL" --language "$LANGUAGE" \
+      --model_dir models --output_dir "$out" --output_format "$FORMAT" \
+      --diarize --min_speakers "$SPEAKERS" --max_speakers "$SPEAKERS"
+  fi
 done
 
 echo "Done. Transcripts are in the $OUTPUT_DIR/ folder."
