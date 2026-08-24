@@ -12,7 +12,7 @@ fi
 
 LANGUAGE=${LANGUAGE:-}
 SPEAKERS=${SPEAKERS:-}
-#MODEL=${MODEL:-large-v3}
+#MODEL=${MODEL:-large-v3} # whisper
 MODEL=${MODEL:-parakeet-v3}
 FORMAT=${FORMAT:-txt}
 OUTPUT_DIR=${OUTPUT_DIR:-output}

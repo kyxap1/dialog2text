@@ -9,7 +9,7 @@ Turns a video or audio recording into text where every line is labelled with the
 
 Everything runs locally on your Mac — nothing is uploaded anywhere.
 
-Russian is the default language ([configuration](#configuration) explains how to change it).
+Language and speaker count are auto-detected by default ([configuration](#configuration) explains how to override them). YouTube URLs work too — paste one instead of a file.
 
 Русская версия: [README.ru.md](README.ru.md)
 
@@ -57,23 +57,32 @@ Results appear in `output/<file name>/`:
 | `.tsv` | table with timestamps, opens in Excel/Numbers    |
 | `.json`| all details, for further processing              |
 
-To transcribe one specific file instead of the whole `input` folder:
+To transcribe one specific file instead of the whole `input` folder, pass a bare filename (looked up inside `input/`), a full path, a comma-separated list, or a YouTube URL:
 
 ```bash
+./run.sh interview.mp4
 ./run.sh ~/Desktop/interview.mp4
+./run.sh interview1.mp4,interview2.mp4
+./run.sh https://www.youtube.com/watch?v=...
 ```
+
+With no arguments it processes everything in `input/`. The transcript is also printed to the terminal after each file (disable with `SHOW_RESULT=0`).
 
 ## Configuration
 
 The settings live at the top of `run.sh` — open it in any text editor and change the values after `:-`:
 
-| Setting      | Default     | Meaning                                                        |
-|--------------|-------------|----------------------------------------------------------------|
-| `LANGUAGE`   | `ru`        | spoken language: `en`, `de`, `fi`, … (`en` for English)         |
-| `SPEAKERS`   | `2`         | how many people talk in the recording                          |
-| `MODEL`      | `large-v3`  | `medium` or `small` are faster but less accurate               |
-| `FORMAT`     | `all`       | set to `txt` to only get the plain transcript                  |
-| `OUTPUT_DIR` | `output`    | where results are written                                      |
+| Setting           | Default        | Meaning                                                        |
+|-------------------|----------------|-----------------------------------------------------------------|
+| `LANGUAGE`        | *(auto)*       | spoken language: `en`, `de`, `fi`, … — empty means auto-detect (Whisper models only, ignored by Parakeet) |
+| `SPEAKERS`        | *(auto)*       | how many people talk in the recording — empty means auto-detect |
+| `MODEL`           | `parakeet-v3`  | `parakeet-v2`/`parakeet-v3` (Parakeet, multilingual) or a Whisper size like `large-v3`, `medium`, `small` |
+| `FORMAT`          | `txt`          | set to `all` to also get `.srt`/`.vtt`/`.tsv`/`.json`           |
+| `OUTPUT_DIR`       | `output`       | where results are written                                      |
+| `YOUTUBE_BROWSER`  | `chrome`       | browser to read cookies from when downloading YouTube URLs      |
+| `SHOW_RESULT`      | `1`            | print each transcript to the terminal when done                 |
+| `CPU_THREADS`      | *(auto)*       | CPU threads to use — auto-calculated as 75% of what's currently free |
+| `MEM_LIMIT_BYTES`  | *(auto)*       | memory cap for the models — auto-calculated as 75% of what's currently free |
 
 You can also set them for a single run without editing anything:
 
@@ -97,10 +106,13 @@ SPEAKERS=3 LANGUAGE=en ./run.sh
 | `install.command`  | one-time setup, double-clickable                             |
 | `run.command`      | transcribe everything in `input`, double-clickable           |
 | `install.sh`, `run.sh` | the same two scripts for Terminal use                   |
+| `parakeet_transcribe.py` | transcription with the Parakeet ASR model               |
+| `cleanup.sh`       | wipe `input/` and `output/`                                  |
 | `requirements.txt` | exact versions of the Python packages (a known-working set)  |
 | `.env`             | your Hugging Face token — private, never share or commit it  |
 | `input/`, `output/`, `models/` | your recordings, the transcripts, the downloaded models |
 
-Under the hood: [whispermlx](https://pypi.org/project/whispermlx/) (Whisper on Apple's MLX) for speech
-recognition and [pyannote](https://huggingface.co/pyannote/speaker-diarization-community-1) for telling
-speakers apart.
+Under the hood: [whispermlx](https://pypi.org/project/whispermlx/) (Whisper on Apple's MLX) or
+[parakeet-mlx](https://pypi.org/project/parakeet-mlx/) (NVIDIA Parakeet on Apple's MLX) for speech
+recognition, [pyannote](https://huggingface.co/pyannote/speaker-diarization-community-1) for telling
+speakers apart, and [yt-dlp](https://github.com/yt-dlp/yt-dlp) for YouTube downloads.
