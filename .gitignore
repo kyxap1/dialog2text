@@ -1,6 +1,7 @@
 .env
 .envrc
 .venv/
+__pycache__/
 input/*
 !input/.gitkeep
 models/
