@@ -6,10 +6,14 @@ segments as {start, end, text}, they don't care which ASR produced them.
 import argparse
 import os
 
+import mlx.core as mx
 from parakeet_mlx import from_pretrained
 from whispermlx.diarize import DiarizationPipeline
 from whispermlx.diarize import assign_word_speakers
 from whispermlx.utils import get_writer
+
+if mem_limit := os.environ.get("MEM_LIMIT_BYTES"):
+    mx.set_memory_limit(int(mem_limit))
 
 MODEL_MAP = {
     "parakeet-v2": "mlx-community/parakeet-tdt-0.6b-v2",
