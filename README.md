@@ -47,7 +47,7 @@ Prefer the Terminal? `./install.sh` does the same thing.
 2. Double-click `run.command` (or run `./run.sh` in the Terminal).
 3. Wait. The first run also downloads about 5 GB of models, so it is much slower than the following ones.
 
-Results appear in `output/<file name>/`:
+Results appear in `output/<file name>/`. By default you only get `.txt`; set `FORMAT=all` to also get the rest:
 
 | File   | What it is                                       |
 |--------|--------------------------------------------------|
