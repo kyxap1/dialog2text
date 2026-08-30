@@ -15,6 +15,7 @@ SPEAKERS=${SPEAKERS:-}
 #MODEL=${MODEL:-large-v3} # whisper
 MODEL=${MODEL:-parakeet-v3}
 FORMAT=${FORMAT:-txt}
+CHUNK_DURATION=${CHUNK_DURATION:-180}
 OUTPUT_DIR=${OUTPUT_DIR:-output}
 HF_TOKEN=${HF_TOKEN:?}
 YOUTUBE_BROWSER=${YOUTUBE_BROWSER:-chrome}
@@ -88,6 +89,7 @@ for file in "${files[@]}"; do
       --hf_token "$HF_TOKEN" \
       --model "$MODEL" \
       --model_dir models --output_dir "$out" --output_format "$FORMAT" \
+      --chunk_duration "$CHUNK_DURATION" \
       --diarize "${speaker_args[@]}"
   else
     $NICE .venv/bin/whispermlx "$file" \

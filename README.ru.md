@@ -78,6 +78,7 @@ English version: [README.md](README.md)
 | `SPEAKERS`         | *(авто)*       | сколько человек говорит в записи — пусто значит автоопределение    |
 | `MODEL`            | `parakeet-v3`  | `parakeet-v2`/`parakeet-v3` (Parakeet, многоязычный) или размер Whisper: `large-v3`, `medium`, `small` |
 | `FORMAT`           | `txt`          | поставьте `all`, чтобы получить ещё `.srt`/`.vtt`/`.tsv`/`.json`    |
+| `CHUNK_DURATION`   | `180`          | только Parakeet: секунд аудио на один проход энкодера — уменьшите, если на длинных файлах кончается память |
 | `OUTPUT_DIR`       | `output`       | куда складывать результаты                                         |
 | `YOUTUBE_BROWSER`  | `chrome`       | браузер, откуда брать cookies для скачивания с YouTube              |
 | `SHOW_RESULT`      | `1`            | печатать расшифровку в терминал после каждого файла                 |
