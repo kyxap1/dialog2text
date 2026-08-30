@@ -78,6 +78,7 @@ The settings live at the top of `run.sh` — open it in any text editor and chan
 | `SPEAKERS`        | *(auto)*       | how many people talk in the recording — empty means auto-detect |
 | `MODEL`           | `parakeet-v3`  | `parakeet-v2`/`parakeet-v3` (Parakeet, multilingual) or a Whisper size like `large-v3`, `medium`, `small` |
 | `FORMAT`          | `txt`          | set to `all` to also get `.srt`/`.vtt`/`.tsv`/`.json`           |
+| `CHUNK_DURATION`  | `180`          | Parakeet only: seconds of audio per encoder pass — lower it if long files run out of memory |
 | `OUTPUT_DIR`       | `output`       | where results are written                                      |
 | `YOUTUBE_BROWSER`  | `chrome`       | browser to read cookies from when downloading YouTube URLs      |
 | `SHOW_RESULT`      | `1`            | print each transcript to the terminal when done                 |

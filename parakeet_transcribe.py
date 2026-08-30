@@ -33,6 +33,10 @@ def main():
     parser.add_argument("--min_speakers", type=int)
     parser.add_argument("--max_speakers", type=int)
     parser.add_argument("--diarize_model", default="pyannote/speaker-diarization-community-1")
+    # Without chunking, parakeet-mlx runs one encoder pass over the whole file;
+    # self-attention is O(n^2), so a ~37 min clip asks Metal for ~50 GB and aborts.
+    # 180 s peaks near 4 GB -- lower it if a memory-constrained machine still OOMs.
+    parser.add_argument("--chunk_duration", type=float, default=180.0)
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -52,7 +56,7 @@ def main():
 
     for audio_path in args.audio:
         print(f"Transcribing {audio_path}...")
-        aligned = model.transcribe(audio_path)
+        aligned = model.transcribe(audio_path, chunk_duration=args.chunk_duration)
         result = {
             "segments": [{"start": s.start, "end": s.end, "text": s.text} for s in aligned.sentences],
             "language": "multilingual",
