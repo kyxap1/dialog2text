@@ -66,6 +66,8 @@ To transcribe one specific file instead of the whole `input` folder, pass a bare
 ./run.sh https://www.youtube.com/watch?v=...
 ```
 
+A YouTube URL is only downloaded once — on later runs, if `input/` already holds the audio with the right length, it is reused.
+
 With no arguments it processes everything in `input/`. The transcript is also printed to the terminal after each file (disable with `SHOW_RESULT=0`).
 
 ## Configuration

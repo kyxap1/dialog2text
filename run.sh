@@ -53,10 +53,21 @@ for arg in "${args[@]}"; do
   IFS=',' read -ra tokens <<< "$arg"
   for token in "${tokens[@]}"; do
     if [[ "$token" == http://* || "$token" == https://* ]]; then
-      echo "==> downloading $token"
-      file=$($NICE .venv/bin/yt-dlp --remote-components ejs:github -x --audio-format mp3 \
-        --cookies-from-browser "$YOUTUBE_BROWSER" \
-        -o "input/%(title)s.%(ext)s" --print after_move:filepath "$token")
+      # Pull metadata only first. yt-dlp forces mp3 and names files <title>.mp3,
+      # so we can spot an existing copy; re-download unless ffprobe confirms its
+      # duration matches (a truncated file reads shorter).
+      mapfile -t meta < <($NICE .venv/bin/yt-dlp --remote-components ejs:github \
+        --simulate --no-warnings --print "%(filename)s" --print "%(duration)s" \
+        --cookies-from-browser "$YOUTUBE_BROWSER" -o "input/%(title)s.%(ext)s" "$token")
+      file="${meta[0]%.*}.mp3"
+      have=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$file" 2>/dev/null)
+      if [[ -s "$file" ]] && awk -v h="${have:-0}" -v w="${meta[1]:-0}" 'BEGIN{exit !(h >= w - 2)}'; then
+        echo "==> cached $file"
+      else
+        echo "==> downloading $token"
+        $NICE .venv/bin/yt-dlp --remote-components ejs:github -x --audio-format mp3 \
+          --cookies-from-browser "$YOUTUBE_BROWSER" -o "input/%(title)s.%(ext)s" "$token"
+      fi
       files+=("$file")
     elif [[ "$token" == "*" ]]; then
       files+=(input/*)
