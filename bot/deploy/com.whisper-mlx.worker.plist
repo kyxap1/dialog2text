@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Install:
+    sed "s#REPO_PATH#$PWD#g" bot/deploy/com.whisper-mlx.worker.plist \
+      > ~/Library/LaunchAgents/com.whisper-mlx.worker.plist
+    launchctl load ~/Library/LaunchAgents/com.whisper-mlx.worker.plist
+  Run this from the whisper-mlx repo root.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.whisper-mlx.worker</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>REPO_PATH/worker.sh</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>REPO_PATH</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>REPO_PATH/jobs/worker.log</string>
+  <key>StandardErrorPath</key>
+  <string>REPO_PATH/jobs/worker.log</string>
+</dict>
+</plist>
