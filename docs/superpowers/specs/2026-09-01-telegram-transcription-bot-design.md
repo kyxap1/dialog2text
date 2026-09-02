@@ -68,9 +68,10 @@ spool protocol below.
   correction inside the container. This needs no cache of its own — `run.sh`
   already writes transcripts to `output/<name>/<name>.txt`; the bot keeps the
   paths the worker reports.
-- **A persistent reply keyboard** with `/queue` and `/go`; no inline keyboards.
-  The buttons just send those commands as text, so every action is still a
-  command or plain text.
+- **A persistent reply keyboard**; no inline keyboards. The buttons just send
+  commands as text, so every action is still a command or plain text. `/retry`
+  is an alias for `/go` (transcription is idempotent — `/go` re-runs only the
+  items that have no transcript yet).
 
 ## Components
 
@@ -79,8 +80,9 @@ spool protocol below.
    `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` from my.telegram.org, in-memory
    session (re-auth on restart is instant). Responsibilities: whitelist check
    (`sender_id` match, no entity resolution), downloading each forwarded file to
-   `media/<message-id>/`, batch state, command handlers (`/start`, `/go`,
-   `/queue`, `/reset`), text-message routing (prompt addition vs correction),
+   `media/<message-id>/`, batch state, command handlers (`/start`, `/go`
+   (= `/retry`), `/queue`, `/reset`), text-message routing (prompt vs
+   correction),
    job queue — plus writing Stage 1 job files into the spool and waiting for
    their result files. Mounts (bind, relative to the repo root —
    `bot/docker-compose.yml` uses `../`): `media` (downloaded files, shared with

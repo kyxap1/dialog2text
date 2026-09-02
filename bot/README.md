@@ -105,6 +105,7 @@ Needs Docker Desktop 4.62+.
 | forward video/audio | added to the batch |
 | text (before first summary) | added to the prompt |
 | `/go` | transcribe new items, then summarise; the batch is kept |
+| `/retry` | re-run transcription for items that failed |
 | text (after a summary) | correction — re-runs the summary with all corrections so far |
 | `/reset` | clear the batch |
 

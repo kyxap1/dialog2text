@@ -21,7 +21,13 @@ log = logging.getLogger("bot")
 PREVIEW_CHARS = 800
 
 # Shown under every reply; the buttons just send these commands as text.
-KEYBOARD = [[Button.text("/queue", resize=True), Button.text("/go", resize=True)]]
+KEYBOARD = [
+    [
+        Button.text("/queue", resize=True),
+        Button.text("/go", resize=True),
+        Button.text("/retry", resize=True),
+    ]
+]
 
 
 class BotApp:
@@ -178,7 +184,9 @@ def build_client(cfg: Config) -> tuple[TelegramClient, BotApp]:
 
     handlers = [
         (state.on_start, events.NewMessage(pattern=r"^/start$", func=mine)),
-        (state.on_go, events.NewMessage(pattern=r"^/go$", func=mine)),
+        # A reply-keyboard button sends its label verbatim, so /retry just
+        # routes to /go — transcription is idempotent, /go re-runs only failures.
+        (state.on_go, events.NewMessage(pattern=r"^/(go|retry)$", func=mine)),
         (state.on_queue, events.NewMessage(pattern=r"^/queue$", func=mine)),
         (state.on_reset, events.NewMessage(pattern=r"^/reset$", func=mine)),
         (state.on_media, events.NewMessage(func=lambda e: mine(e) and e.message.file is not None)),

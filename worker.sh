@@ -67,17 +67,20 @@ process_job() {
   local media=() records=()
   [ -n "$media_raw" ] && mapfile -t media <<<"$media_raw"
 
-  local i=0 rel name stem txt
+  local i=0 rel name stem txt log
   for rel in "${media[@]}"; do
     i=$((i + 1))
     name=$(basename "$rel")
     stem="${name%.*}"
     txt="$OUTPUT_DIR/$stem/$stem.txt"
+    log="$JOBS_DIR/run.$id.$i.log"
     echo "==> [$i] $rel"
-    if "$RUN_SH" "$MEDIA_DIR/$rel" && [ -f "$txt" ]; then
+    # Keep run.sh's own output; on failure it is the only clue we have.
+    if "$RUN_SH" "$MEDIA_DIR/$rel" 2>&1 | tee "$log" && [ -f "$txt" ]; then
+      rm -f "$log"
       records+=("$(printf '%s\t%s\t%s\t' "$i" "$name" "$stem/$stem.txt")")
     else
-      records+=("$(printf '%s\t%s\t\t%s' "$i" "$name" "transcription failed")")
+      records+=("$(printf '%s\t%s\t\t%s' "$i" "$name" "transcription failed (see $log)")")
     fi
   done
 
