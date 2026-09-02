@@ -12,6 +12,8 @@ def tg_path_to_relative(file_path: str, api_root: Path) -> str:
     Falls back to the last three components if the prefix is not what we expect
     (local-mode path shape has varied across telegram-bot-api versions).
     """
+    if file_path.startswith("file://"):
+        file_path = file_path[len("file://") :]
     path = Path(file_path)
     try:
         return str(path.relative_to(api_root))
