@@ -11,6 +11,17 @@ def _update(text=None):
     return FakeUpdate(FakeMessage(text=text))
 
 
+async def test_queue_lists_media_with_transcription_state(cfg):
+    app = BotApp(cfg)
+    app.batch.add_media("a.mp4")
+    app.batch.add_media("b.mp4")
+    app.batch.media[0].transcript_path = "1/1.txt"
+
+    upd = _update()
+    await app.on_queue(upd, FakeContext(FakeBot()))
+    assert upd.message.replies == ["[1] a.mp4 — transcribed\n[2] b.mp4 — pending"]
+
+
 async def test_text_before_output_is_a_prompt_addition_and_queues_nothing(cfg):
     app = BotApp(cfg)
     upd = _update("use bullet points")

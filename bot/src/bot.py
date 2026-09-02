@@ -7,7 +7,7 @@ import logging
 from io import BytesIO
 from pathlib import Path
 
-from telegram import Update
+from telegram import KeyboardButton, ReplyKeyboardMarkup, Update
 from telegram.error import TelegramError
 from telegram.ext import (
     Application,
@@ -28,6 +28,11 @@ from .stage2 import build_system_prompt, build_transcript_text
 log = logging.getLogger("bot")
 
 PREVIEW_CHARS = 800
+
+# Shown under every bot reply; the buttons just send these commands as text.
+KEYBOARD = ReplyKeyboardMarkup(
+    [[KeyboardButton("/queue"), KeyboardButton("/go")]], resize_keyboard=True
+)
 
 
 class BotApp:
@@ -53,6 +58,13 @@ class BotApp:
 
     # -- handlers ---------------------------------------------------------
 
+    async def _reply(self, update: Update, text: str) -> None:
+        # Every reply re-sends the keyboard so the /queue /go buttons stay put.
+        await update.message.reply_text(text, reply_markup=KEYBOARD)
+
+    async def on_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        await self._reply(update, "Forward media, then /go.")
+
     async def on_media(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         message = update.message
         obj = (
@@ -65,31 +77,43 @@ class BotApp:
         try:
             tg_file = await context.bot.get_file(obj.file_id)
         except TelegramError as exc:
-            await message.reply_text(f"File rejected: {exc}")
+            await self._reply(update, f"File rejected: {exc}")
             return
         rel = tg_path_to_relative(tg_file.file_path, self.cfg.api_root)
         item = self.batch.add_media(rel)
-        await message.reply_text(f"Added [{item.index}] {Path(rel).name}")
+        await self._reply(update, f"Added [{item.index}] {Path(rel).name}")
+
+    async def on_queue(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        await self._reply(update, self._batch_lines())
+
+    def _batch_lines(self) -> str:
+        if not self.batch.media:
+            return "Batch is empty."
+        return "\n".join(
+            f"[{m.index}] {Path(m.filename).name} — "
+            + ("transcribed" if m.transcript_path else "pending")
+            for m in self.batch.media
+        )
 
     async def on_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         kind = self.batch.add_text(update.message.text)
         if kind == "prompt":
-            await update.message.reply_text("Added to the prompt.")
+            await self._reply(update, "Added to the prompt.")
             return
         position = self.queue.qsize()
         await self.queue.put(lambda: self._stage2_job(update, context))
-        await update.message.reply_text(
-            f"Correction queued (position {position}); re-running the summary."
+        await self._reply(
+            update, f"Correction queued (position {position}); re-running the summary."
         )
 
     async def on_go(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         position = self.queue.qsize()
         await self.queue.put(lambda: self._go_job(update, context))
-        await update.message.reply_text(f"Queued (position {position}).")
+        await self._reply(update, f"Queued (position {position}).")
 
     async def on_reset(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         self.batch.reset()
-        await update.message.reply_text("Batch cleared.")
+        await self._reply(update, "Batch cleared.")
 
     # -- jobs -----------------------------------------------------------
 
@@ -132,6 +156,7 @@ class BotApp:
                 model=self.cfg.llm_model,
                 base_url=self.cfg.llm_base_url,
                 provider=self.cfg.llm_provider,
+                strip_reasoning=self.cfg.llm_strip_reasoning,
             )
         except llm.LLMError as exc:
             await self._send_document(update, context, "transcripts.md", text)
@@ -176,7 +201,9 @@ def build_application(cfg: Config) -> Application:
         | filters.VIDEO_NOTE
         | filters.Document.ALL
     )
+    application.add_handler(CommandHandler("start", state.on_start, filters=only_me))
     application.add_handler(CommandHandler("go", state.on_go, filters=only_me))
+    application.add_handler(CommandHandler("queue", state.on_queue, filters=only_me))
     application.add_handler(CommandHandler("reset", state.on_reset, filters=only_me))
     application.add_handler(MessageHandler(only_me & media, state.on_media))
     application.add_handler(

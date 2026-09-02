@@ -26,4 +26,7 @@ services:
       - ../prompts:/app/prompts:ro
     depends_on:
       - telegram-bot-api
+    # Reach Docker Model Runner on the host when LLM_PROVIDER=local.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped

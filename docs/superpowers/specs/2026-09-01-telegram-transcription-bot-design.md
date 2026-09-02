@@ -14,8 +14,9 @@ a correction that re-runs the LLM pass over the already-transcribed batch.
 The laptop is not always on. When it is off, Telegram queues updates for up to
 24h and the bot catches up on reconnect.
 
-The bot, the local Telegram API server and the LLM client run under Docker
-Compose. Transcription (`run.sh`) stays on the host — see the next section.
+The bot and the local Telegram API server run under Docker Compose.
+Transcription (`run.sh`) stays on the host; so does the LLM when the local
+backend is used — see the next section.
 
 The bot is a self-contained project in the `bot/` subdirectory: its own
 `Dockerfile`, `docker-compose.yml`, Python dependencies and tests. It shares no
@@ -26,12 +27,13 @@ spool protocol below.
 
 - **Private, single user.** Only the author's Telegram user ID is served;
   everything else is silently ignored.
-- **Runs split across Docker and the host.** MLX (`whispermlx` /
-  `parakeet-mlx`) needs Apple Metal, which Docker Desktop's Linux VM on macOS
-  cannot reach. So **Stage 1 (transcription) stays on the host**, run by
-  `run.sh` exactly as today. Everything that *can* be containerized — the
-  Telegram local API server, the bot, the LLM client — runs under Docker
-  Compose. The two halves talk through a shared `jobs/` spool directory on
+- **Runs split across Docker and the host.** MLX — `whispermlx` /
+  `parakeet-mlx`, and `vllm-metal` for the local LLM — needs Apple Metal, which
+  Docker Desktop's Linux VM on macOS cannot reach. So **Stage 1 (transcription)
+  stays on the host**, run by `run.sh` exactly as today, and the local LLM
+  backend runs on the host too, as a Docker Model Runner service the bot reaches
+  over HTTP. The Telegram local API server and the bot run under Docker Compose.
+  Transcription and the bot talk through a shared `jobs/` spool directory on
   disk (protocol below).
 - **Large files.** Forwarded videos exceed the 20 MB Bot API download limit, so
   a local `telegram-bot-api` server runs alongside the bot as a Compose service
@@ -44,10 +46,17 @@ spool protocol below.
 - **No transcript chunking.** The combined transcript of a batch is fed to the
   LLM in one request. Context limits are accepted as out of scope for now; if a
   batch ever overflows, map-reduce joining is the upgrade path.
-- **LLM provider is pluggable.** Grok (xAI, OpenAI-compatible `api.x.ai`) is the
-  default. A Claude implementation can be added later behind the same interface.
-  Grok API key and current free-tier terms must be confirmed at setup — not
-  verified here.
+- **LLM provider is pluggable** — one `run_prompt` over an OpenAI-compatible
+  endpoint, backend chosen by `LLM_PROVIDER`:
+  - **Remote API** (`grok`, or any OpenAI-compatible host) — needs `LLM_API_KEY`.
+    Grok (xAI, `api.x.ai`) is the reference; key and current pricing are
+    confirmed at setup, not here.
+  - **Local, on-demand** (`local`) — Docker Model Runner with the `vllm-metal`
+    backend serves an MLX model on the host's Metal GPU over the same
+    OpenAI-compatible API, no key; `LLM_BASE_URL` points at
+    `host.docker.internal:12434/engines/v1`. DMR unloads the model after ~5 min
+    idle (built-in, not tunable), so it only holds RAM around an actual `/go` or
+    correction; the first request after idle pays a model-load delay.
 - **Metaprompt lives in the repo** as a file, bind-mounted read-only into the
   bot container and loaded at runtime on every LLM pass. Its contents do not
   affect the design. It is edited in a text editor on the laptop, not over
@@ -82,15 +91,23 @@ spool protocol below.
    `jobs/*.job.json`, for each media path run `./run.sh <file>`, read
    `output/<name>/<name>.txt`, write `jobs/<id>.result.json`, delete the job
    file. `run.sh` and the Python pipeline are unchanged. One job at a time.
-4. **LLM client** — `run_prompt(system: str, text: str) -> str`. One Grok
-   implementation now; provider chosen by env var. Runs inside the bot
-   container. Mockable for tests.
+4. **LLM client** — `run_prompt(system: str, text: str) -> str`, one
+   OpenAI-compatible implementation for both backends; `LLM_PROVIDER` picks
+   remote-API vs local. Runs inside the bot container; for `local` it calls the
+   Docker Model Runner endpoint Compose injects. Mockable for tests.
 5. **`prompts/default.md`** — the metaprompt, bind-mounted read-only into the
    bot container and read fresh on each LLM pass, so editing it on the host
    takes effect on the next correction without a restart.
 6. **launchd LaunchAgent** — starts `worker.sh` on login. The bot itself is now
    started by Docker Compose; enable "Start Docker Desktop on login" so the
    stack comes up after a reboot.
+7. **Docker Model Runner** (only when `LLM_PROVIDER=local`) — a host service
+   (Docker Desktop 4.62+) serving an MLX model on the Metal GPU over an
+   OpenAI-compatible API at `host.docker.internal:12434/engines/v1`. One-time
+   host setup: `docker model install-runner --backend vllm`, then
+   `docker model pull hf.co/mlx-community/…`. The bot points `LLM_BASE_URL` /
+   `LLM_MODEL` at it; DMR loads on first request and unloads ~5 min after the
+   last. Unused with a remote API.
 
 ## Deployment layout
 
@@ -119,7 +136,9 @@ contract is just the spool protocol) but adds a second clone and duplicated
 
 Bot and API config, via `bot/.env` that Compose reads: `TELEGRAM_BOT_TOKEN`,
 `ADMIN_USER_ID`, `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, `LLM_PROVIDER`,
-`LLM_API_KEY`.
+`LLM_MODEL`, `LLM_BASE_URL`. A remote API also needs `LLM_API_KEY`; for
+`LLM_PROVIDER=local` no key is needed and `LLM_BASE_URL` points at the DMR
+endpoint on the host.
 
 ### Spool protocol
 
@@ -210,6 +229,11 @@ time — the transcription pipeline already caps itself at ~75% of free RAM/CPU.
 On `/go` the bot replies with queue position; it posts progress as each media
 item's result lands.
 
+The queue also keeps Stage 1 and Stage 2 from overlapping, so transcription and
+a local LLM pass never run at the same moment. A just-used local model can still
+sit in host RAM during its ~5 min idle window while the next transcription runs;
+the 75% cap leaves headroom for that.
+
 ## Error handling
 
 | Situation | Behaviour |
@@ -220,7 +244,7 @@ item's result lands.
 | All media items fail | Report failure; `/go` retries |
 | Worker not running / Docker can't see the spool | Job file sits in `jobs/` untouched; the bot reports "queued" and keeps waiting. It runs when the worker is back — same tolerance as the laptop being asleep |
 | Malformed job file | Worker writes a `result.json` with every item errored; bot reports the batch failed, `/go` retries |
-| LLM API error | Send the raw concatenated transcripts as a document + an error note. The batch is kept either way, so the correction that triggered it can simply be re-sent |
+| LLM error — remote API down, or the local model / DMR unavailable | Send the raw concatenated transcripts as a document + an error note. The batch is kept either way, so the correction that triggered it can simply be re-sent |
 | Correction sent while a job is running | Queued behind it, applied on the next stage 2 |
 | Bot crash mid-job | Job lost; polling replays queued Telegram updates on restart; user re-runs `/go`. Any in-flight `.job.json` is still picked up by the worker; its `result.json` is ignored by the restarted bot and reused on the next `/go` |
 
@@ -241,8 +265,10 @@ item's result lands.
 - **Worker**: one shell self-check next to `worker.sh` — feed it a fixture
   `job.json` and a malformed one, assert the produced `result.json` shape.
   `run.sh` is mocked.
-- **LLM client**: mocked in all bot tests; a separate thin live check hitting
-  Grok with a trivial prompt, run manually.
+- **LLM client**: mocked in all bot tests; the provider gate covered by a unit
+  test (`grok`/`local` accepted, unknown rejected). A thin live check per
+  backend — a trivial prompt against the remote API, and `docker model` + a
+  trivial prompt for local — run manually.
 - **End-to-end**: manual — `cd bot && docker compose up`, start the worker,
   forward a real batch, `/go`, send a correction, inspect both returned `.md`
   files.
@@ -275,4 +301,11 @@ Deliberately cut. Each names what would bring it back.
 - Per-video summaries (only the combined summary is produced)
 - Returning raw per-video transcripts (only on a future flag)
 - Any non-author user, rate limiting, multi-tenant concerns
-- Local MLX LLM backend (M5 Pro / 48 GB can host it later; Grok first)
+- **Keeping the local model resident / a configurable idle timeout** — DMR's
+  built-in ~5 min unload is taken as-is. Revisit only if the reload delay on the
+  first `/go` after idle becomes annoying in practice
+- **Auto-selecting the backend** (fall back to local when the API key is
+  missing, or vice versa) — `LLM_PROVIDER` is set explicitly
+- **A Compose `models:` block for DMR** — a one-time `docker model pull` plus
+  two env vars is less machinery. Adopt the block if model management becomes a
+  chore

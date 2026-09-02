@@ -9,14 +9,16 @@ Design: [`../docs/superpowers/specs/2026-09-01-telegram-transcription-bot-design
 ## How it runs
 
 Transcription (`run.sh`, whisper-mlx + pyannote) needs Apple Metal, so it stays
-on the host. Everything else runs under Docker Compose:
+on the host. The bot and the local Telegram API server run under Docker Compose.
+The LLM pass calls either a remote API (Grok) or a local model served on the
+host by Docker Model Runner — see "LLM backend" below.
 
 ```
 Telegram ── long poll ──> bot container ──> jobs/*.job.json ──> worker.sh (host) ──> run.sh
                               │                                       │
                               │ <──────────── jobs/*.result.json <─────┘
                               ▼
-                        LLM pass (Grok) ──> summary.md
+                     LLM pass (Grok API │ local model) ──> summary.md
 ```
 
 `jobs/` and `tg-data/` (media the local API server writes) are shared through
@@ -29,7 +31,7 @@ bind mounts.
    - `ADMIN_USER_ID` — your numeric id (@userinfobot); only this user is served
    - `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` — https://my.telegram.org → API
      development tools (lets the local server fetch files over 20 MB)
-   - `LLM_API_KEY`, `LLM_MODEL` — see "Grok key" below
+   - `LLM_PROVIDER` and its settings — see "LLM backend" below
 
 2. **Host worker** (from the repo root):
 
@@ -47,7 +49,14 @@ bind mounts.
 
    Enable "Start Docker Desktop on login" so it comes back after a reboot.
 
-## Grok key
+## LLM backend
+
+Set `LLM_PROVIDER` to `grok` (a remote API) or `local` (a model on this Mac).
+
+### Remote API (`LLM_PROVIDER=grok`)
+
+Works with Grok or any OpenAI-compatible host (`LLM_BASE_URL`, `LLM_MODEL`,
+`LLM_API_KEY`). For Grok:
 
 1. Sign in at <https://console.x.ai> with your X account.
 2. **Create an API key**: left sidebar → *API Keys* → *Create API Key*. Copy it
@@ -59,6 +68,34 @@ bind mounts.
    (e.g. `grok-4`, `grok-3`, `grok-3-mini`). The `.env.example` default
    (`grok-beta`) is a placeholder.
 5. Verify: `curl https://api.x.ai/v1/models -H "Authorization: Bearer $LLM_API_KEY"`.
+
+### Local model (`LLM_PROVIDER=local`, no API key)
+
+Docker Model Runner serves an MLX model on the Metal GPU and unloads it ~5 min
+after the last request, so it only holds RAM around a `/go` or a correction.
+Needs Docker Desktop 4.62+.
+
+1. One-time host setup (the `hf.co/` prefix is required — without it Docker
+   looks on Docker Hub and the pull fails):
+
+   ```bash
+   docker model install-runner --backend vllm
+   docker model pull hf.co/mlx-community/Qwen3.8-27B-4bit
+   ```
+
+   `Qwen3.8-27B-4bit` is ~16 GB in RAM with a 262K context. For better quality
+   at ~28 GB use `hf.co/mlx-community/Qwen3.8-27B-8bit`. Browse
+   <https://huggingface.co/mlx-community>.
+
+2. In `bot/.env` (use the exact name from `docker model ls` for `LLM_MODEL`):
+
+   ```
+   LLM_PROVIDER=local
+   LLM_BASE_URL=http://host.docker.internal:12434/engines/v1
+   LLM_MODEL=hf.co/mlx-community/Qwen3.8-27B-4bit
+   ```
+
+3. Verify (from the host): `curl http://localhost:12434/engines/v1/models`.
 
 ## Commands
 

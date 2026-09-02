@@ -29,7 +29,7 @@ class FakeMessage:
         self.audio = self.voice = self.video_note = self.document = None
         self.replies: list[str] = []
 
-    async def reply_text(self, text):
+    async def reply_text(self, text, reply_markup=None):
         self.replies.append(text)
 
 
@@ -64,5 +64,6 @@ def cfg(tmp_path: Path) -> Config:
         llm_api_key="k",
         llm_model="grok-test",
         llm_base_url="http://x/v1",
+        llm_strip_reasoning=True,
         result_poll_seconds=0.01,
     )
