@@ -6,46 +6,43 @@ from src.config import Config
 
 
 class FakeFile:
-    def __init__(self, file_path: str):
-        self.file_path = file_path
+    def __init__(self, name="x.mp4", ext=".mp4"):
+        self.name = name
+        self.ext = ext
 
 
-class FakeBot:
-    def __init__(self, file_path="/var/lib/telegram-bot-api/tok/videos/x.mp4"):
-        self._file_path = file_path
-        self.documents: list[tuple[int, str]] = []
+class FakeClient:
+    def __init__(self):
+        self.files: list[tuple[int, str]] = []
 
-    async def get_file(self, file_id):
-        return FakeFile(self._file_path)
-
-    async def send_document(self, chat_id, document, filename):
-        self.documents.append((chat_id, filename))
+    async def send_file(self, chat_id, file, **kwargs):
+        self.files.append((chat_id, getattr(file, "name", None)))
 
 
 class FakeMessage:
-    def __init__(self, text=None, video=None):
-        self.text = text
-        self.video = video
-        self.audio = self.voice = self.video_note = self.document = None
-        self.replies: list[str] = []
+    def __init__(self, text="", file=None, msg_id=1):
+        self.raw_text = text
+        self.file = file
+        self.id = msg_id
+        self.media = object() if file is not None else None
 
-    async def reply_text(self, text, reply_markup=None):
-        self.replies.append(text)
-
-
-class FakeChat:
-    id = 42
+    async def download_media(self, file):
+        Path(file).parent.mkdir(parents=True, exist_ok=True)
+        Path(file).write_bytes(b"fake")
+        return file
 
 
-class FakeUpdate:
-    def __init__(self, message: FakeMessage):
+class FakeEvent:
+    def __init__(self, message: FakeMessage, client=None, sender_id=1, chat_id=42):
         self.message = message
-        self.effective_chat = FakeChat()
+        self.raw_text = message.raw_text
+        self.client = client or FakeClient()
+        self.sender_id = sender_id
+        self.chat_id = chat_id
+        self.responses: list[str] = []
 
-
-class FakeContext:
-    def __init__(self, bot: FakeBot):
-        self.bot = bot
+    async def respond(self, text, buttons=None):
+        self.responses.append(text)
 
 
 @pytest.fixture
@@ -55,8 +52,9 @@ def cfg(tmp_path: Path) -> Config:
     return Config(
         bot_token="t",
         admin_user_id=1,
-        api_base_url="http://x:8081",
-        api_root=Path("/var/lib/telegram-bot-api"),
+        api_id=1,
+        api_hash="h",
+        media_dir=tmp_path / "media",
         jobs_dir=tmp_path / "jobs",
         output_dir=tmp_path / "output",
         metaprompt_path=metaprompt,

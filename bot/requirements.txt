@@ -1,2 +1,2 @@
-python-telegram-bot>=21.6,<23
+telethon>=1.36,<2
 openai>=1.50,<2

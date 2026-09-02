@@ -11,7 +11,7 @@ set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
 JOBS_DIR=${JOBS_DIR:-jobs}
-TG_DATA_DIR=${TG_DATA_DIR:-tg-data}
+MEDIA_DIR=${MEDIA_DIR:-media}
 OUTPUT_DIR=${OUTPUT_DIR:-output}
 RUN_SH=${RUN_SH:-./run.sh}
 POLL_SECONDS=${POLL_SECONDS:-2}
@@ -74,7 +74,7 @@ process_job() {
     stem="${name%.*}"
     txt="$OUTPUT_DIR/$stem/$stem.txt"
     echo "==> [$i] $rel"
-    if "$RUN_SH" "$TG_DATA_DIR/$rel" && [ -f "$txt" ]; then
+    if "$RUN_SH" "$MEDIA_DIR/$rel" && [ -f "$txt" ]; then
       records+=("$(printf '%s\t%s\t%s\t' "$i" "$name" "$stem/$stem.txt")")
     else
       records+=("$(printf '%s\t%s\t\t%s' "$i" "$name" "transcription failed")")

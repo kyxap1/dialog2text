@@ -33,10 +33,11 @@ def _env_bool(name: str, default: bool) -> bool:
 class Config:
     bot_token: str
     admin_user_id: int
-    api_base_url: str
-    # Prefix the local telegram-bot-api server puts on the paths it reports;
-    # stripped to get a path relative to the shared tg-data root.
-    api_root: Path
+    # my.telegram.org credentials; Telethon needs them even in bot-token mode.
+    api_id: int
+    api_hash: str
+    # Where the bot saves forwarded media; the host worker reads the same tree.
+    media_dir: Path
     jobs_dir: Path
     output_dir: Path
     metaprompt_path: Path
@@ -55,8 +56,9 @@ def load_config() -> Config:
     return Config(
         bot_token=_require("TELEGRAM_BOT_TOKEN"),
         admin_user_id=int(_require("ADMIN_USER_ID")),
-        api_base_url=env.get("TELEGRAM_API_BASE_URL", "http://telegram-bot-api:8081"),
-        api_root=Path(env.get("TELEGRAM_API_ROOT", "/var/lib/telegram-bot-api")),
+        api_id=int(_require("TELEGRAM_API_ID")),
+        api_hash=_require("TELEGRAM_API_HASH"),
+        media_dir=Path(env.get("MEDIA_DIR", "/app/media")),
         jobs_dir=Path(env.get("JOBS_DIR", "/app/jobs")),
         output_dir=Path(env.get("OUTPUT_DIR", "/app/output")),
         metaprompt_path=Path(env.get("METAPROMPT_PATH", "/app/prompts/default.md")),

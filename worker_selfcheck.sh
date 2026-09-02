@@ -7,8 +7,8 @@ cd "$(dirname "${BASH_SOURCE[0]}")"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-mkdir -p "$tmp/jobs" "$tmp/tg-data/tok/videos" "$tmp/output"
-: >"$tmp/tg-data/tok/videos/a.mp4"
+mkdir -p "$tmp/jobs" "$tmp/media/77" "$tmp/output"
+: >"$tmp/media/77/a.mp4"
 
 cat >"$tmp/fake-run.sh" <<'SH'
 #!/usr/bin/env bash
@@ -18,10 +18,10 @@ printf '[SPEAKER_00]: hello\n' >"$OUTPUT_DIR/$stem/$stem.txt"
 SH
 chmod +x "$tmp/fake-run.sh"
 
-export JOBS_DIR="$tmp/jobs" TG_DATA_DIR="$tmp/tg-data" OUTPUT_DIR="$tmp/output"
+export JOBS_DIR="$tmp/jobs" MEDIA_DIR="$tmp/media" OUTPUT_DIR="$tmp/output"
 export RUN_SH="$tmp/fake-run.sh" PY="${PY:-.venv/bin/python}"
 
-printf '{"media": ["tok/videos/a.mp4"]}' >"$tmp/jobs/20260101T000000-aaaaaaaa.job.json"
+printf '{"media": ["77/a.mp4"]}'          >"$tmp/jobs/20260101T000000-aaaaaaaa.job.json"
 printf 'not json'                         >"$tmp/jobs/20260101T000001-bbbbbbbb.job.json"
 
 # shellcheck source=worker.sh

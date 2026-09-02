@@ -4,11 +4,20 @@ import pytest
 
 from src import llm
 from src.bot import BotApp
-from tests.conftest import FakeBot, FakeContext, FakeMessage, FakeUpdate
+from tests.conftest import FakeClient, FakeEvent, FakeFile, FakeMessage
 
 
-def _update(text=None):
-    return FakeUpdate(FakeMessage(text=text))
+def _event(text="", file=None, msg_id=1):
+    return FakeEvent(FakeMessage(text=text, file=file, msg_id=msg_id))
+
+
+async def test_media_is_downloaded_into_a_token_free_per_message_dir(cfg):
+    app = BotApp(cfg)
+    ev = _event(file=FakeFile(name="clip.mp4"), msg_id=77)
+    await app.on_media(ev)
+    assert (cfg.media_dir / "77" / "clip.mp4").exists()
+    assert app.batch.media[0].filename == "77/clip.mp4"
+    assert ev.responses == ["Added [1] clip.mp4"]
 
 
 async def test_queue_lists_media_with_transcription_state(cfg):
@@ -17,16 +26,16 @@ async def test_queue_lists_media_with_transcription_state(cfg):
     app.batch.add_media("b.mp4")
     app.batch.media[0].transcript_path = "1/1.txt"
 
-    upd = _update()
-    await app.on_queue(upd, FakeContext(FakeBot()))
-    assert upd.message.replies == ["[1] a.mp4 — transcribed\n[2] b.mp4 — pending"]
+    ev = _event()
+    await app.on_queue(ev)
+    assert ev.responses == ["[1] a.mp4 — transcribed\n[2] b.mp4 — pending"]
 
 
 async def test_text_before_output_is_a_prompt_addition_and_queues_nothing(cfg):
     app = BotApp(cfg)
-    upd = _update("use bullet points")
-    await app.on_text(upd, FakeContext(FakeBot()))
-    assert upd.message.replies == ["Added to the prompt."]
+    ev = _event("use bullet points")
+    await app.on_text(ev)
+    assert ev.responses == ["Added to the prompt."]
     assert app.queue.empty()
     assert not cfg.jobs_dir.exists() or not list(cfg.jobs_dir.iterdir())
 
@@ -45,9 +54,8 @@ async def test_correction_reruns_stage2_only_no_job_file_no_stage1(cfg, monkeypa
         llm, "run_prompt", lambda system, text, **kw: calls.update(system=system, text=text) or "SUMMARY"
     )
 
-    upd = _update("fix the intro")
-    ctx = FakeContext(FakeBot())
-    await app.on_text(upd, ctx)
+    ev = _event("fix the intro")
+    await app.on_text(ev)
     assert app.queue.qsize() == 1
 
     job = await app.queue.get()
@@ -55,7 +63,7 @@ async def test_correction_reruns_stage2_only_no_job_file_no_stage1(cfg, monkeypa
 
     assert calls["text"] == "=== [1] 1 ===\n[SPEAKER_00]: hi"
     assert "fix the intro" in calls["system"]
-    assert ctx.bot.documents == [(42, "summary.md")]
+    assert ev.client.files == [(42, "summary.md")]
     assert app.batch.has_output is True
     assert not cfg.jobs_dir.exists() or not list(cfg.jobs_dir.iterdir())
 
@@ -71,12 +79,11 @@ async def test_llm_error_sends_raw_transcripts_and_keeps_batch(cfg, monkeypatch)
         raise llm.LLMError("429 rate limited")
 
     monkeypatch.setattr(llm, "run_prompt", boom)
-    upd = _update()
-    ctx = FakeContext(FakeBot())
-    await app._stage2_job(upd, ctx)
+    ev = _event()
+    await app._stage2_job(ev)
 
-    assert ctx.bot.documents == [(42, "transcripts.md")]
-    assert any("LLM error" in r for r in upd.message.replies)
+    assert ev.client.files == [(42, "transcripts.md")]
+    assert any("LLM error" in r for r in ev.responses)
     assert app.batch.media  # batch kept
 
 
@@ -109,8 +116,7 @@ async def test_go_writes_a_job_for_untranscribed_items_then_runs_stage2(cfg, mon
     (cfg.output_dir / "b").mkdir(parents=True)
     (cfg.output_dir / "b" / "b.txt").write_text("new")
 
-    upd = _update()
-    ctx = FakeContext(FakeBot())
+    ev = _event()
 
     async def fake_worker():
         # stand in for the host worker: wait for the job, answer it
@@ -129,7 +135,7 @@ async def test_go_writes_a_job_for_untranscribed_items_then_runs_stage2(cfg, mon
             await asyncio.sleep(0.01)
         raise AssertionError("no job file appeared")
 
-    await asyncio.gather(app._go_job(upd, ctx), fake_worker())
+    await asyncio.gather(app._go_job(ev), fake_worker())
 
     assert app.batch.media[1].transcript_path == "b/b.txt"
-    assert ctx.bot.documents == [(42, "summary.md")]
+    assert ev.client.files == [(42, "summary.md")]

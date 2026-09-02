@@ -1,4 +1,4 @@
-"""Telegram bot: whitelist, batch state, command/text routing, job queue."""
+"""Telegram bot (Telethon/MTProto): whitelist, batch state, routing, job queue."""
 
 from __future__ import annotations
 
@@ -7,44 +7,35 @@ import logging
 from io import BytesIO
 from pathlib import Path
 
-from telegram import KeyboardButton, ReplyKeyboardMarkup, Update
-from telegram.error import TelegramError
-from telegram.ext import (
-    Application,
-    ApplicationBuilder,
-    CommandHandler,
-    ContextTypes,
-    MessageHandler,
-    filters,
-)
+from telethon import Button, TelegramClient, events
+from telethon.sessions import MemorySession
 
 from . import llm
 from .batch import Batch
 from .config import Config
 from .spool import await_result, new_job_id, write_job
-from .paths import tg_path_to_relative
 from .stage2 import build_system_prompt, build_transcript_text
 
 log = logging.getLogger("bot")
 
 PREVIEW_CHARS = 800
 
-# Shown under every bot reply; the buttons just send these commands as text.
-KEYBOARD = ReplyKeyboardMarkup(
-    [[KeyboardButton("/queue"), KeyboardButton("/go")]], resize_keyboard=True
-)
+# Shown under every reply; the buttons just send these commands as text.
+KEYBOARD = [[Button.text("/queue", resize=True), Button.text("/go", resize=True)]]
 
 
 class BotApp:
     """Holds the batch and the single job queue; methods are the handlers."""
 
-    def __init__(self, cfg: Config):
+    def __init__(self, cfg: Config, client: TelegramClient | None = None):
         self.cfg = cfg
+        self.client = client
         self.batch = Batch()
         self.queue: asyncio.Queue = asyncio.Queue()
+        self._queue_task: asyncio.Task | None = None
 
-    async def start_queue_worker(self, application: Application) -> None:
-        application.create_task(self._run_queue())
+    def start_queue(self) -> None:
+        self._queue_task = asyncio.create_task(self._run_queue())
 
     async def _run_queue(self) -> None:
         while True:
@@ -58,33 +49,36 @@ class BotApp:
 
     # -- handlers ---------------------------------------------------------
 
-    async def _reply(self, update: Update, text: str) -> None:
+    async def _reply(self, event, text: str) -> None:
         # Every reply re-sends the keyboard so the /queue /go buttons stay put.
-        await update.message.reply_text(text, reply_markup=KEYBOARD)
+        await event.respond(text, buttons=KEYBOARD)
 
-    async def on_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        await self._reply(update, "Forward media, then /go.")
+    async def on_start(self, event) -> None:
+        await self._reply(event, "Forward media, then /go.")
 
-    async def on_media(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        message = update.message
-        obj = (
-            message.video
-            or message.audio
-            or message.voice
-            or message.video_note
-            or message.document
-        )
-        try:
-            tg_file = await context.bot.get_file(obj.file_id)
-        except TelegramError as exc:
-            await self._reply(update, f"File rejected: {exc}")
+    async def on_media(self, event) -> None:
+        msg = event.message
+        f = msg.file
+        if f is None:
             return
-        rel = tg_path_to_relative(tg_file.file_path, self.cfg.api_root)
-        item = self.batch.add_media(rel)
-        await self._reply(update, f"Added [{item.index}] {Path(rel).name}")
+        name = f.name or f"{msg.id}{f.ext or ''}"
+        # Per-message subdir keeps the media path token-free and unique; the
+        # basename stays clean for the status lines and stage-2 headings.
+        # ponytail: two forwards with the same filename collide in output/;
+        # prefix the name with msg.id if that ever bites.
+        dest = self.cfg.media_dir / str(msg.id) / name
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            await msg.download_media(file=str(dest))
+        except Exception as exc:  # a 2 GB download can fail mid-stream
+            log.exception("download failed")
+            await self._reply(event, f"Download failed: {exc}")
+            return
+        item = self.batch.add_media(f"{msg.id}/{name}")
+        await self._reply(event, f"Added [{item.index}] {name}")
 
-    async def on_queue(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        await self._reply(update, self._batch_lines())
+    async def on_queue(self, event) -> None:
+        await self._reply(event, self._batch_lines())
 
     def _batch_lines(self) -> str:
         if not self.batch.media:
@@ -95,34 +89,34 @@ class BotApp:
             for m in self.batch.media
         )
 
-    async def on_text(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        kind = self.batch.add_text(update.message.text)
+    async def on_text(self, event) -> None:
+        kind = self.batch.add_text(event.raw_text)
         if kind == "prompt":
-            await self._reply(update, "Added to the prompt.")
+            await self._reply(event, "Added to the prompt.")
             return
         position = self.queue.qsize()
-        await self.queue.put(lambda: self._stage2_job(update, context))
+        await self.queue.put(lambda: self._stage2_job(event))
         await self._reply(
-            update, f"Correction queued (position {position}); re-running the summary."
+            event, f"Correction queued (position {position}); re-running the summary."
         )
 
-    async def on_go(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async def on_go(self, event) -> None:
         position = self.queue.qsize()
-        await self.queue.put(lambda: self._go_job(update, context))
-        await self._reply(update, f"Queued (position {position}).")
+        await self.queue.put(lambda: self._go_job(event))
+        await self._reply(event, f"Queued (position {position}).")
 
-    async def on_reset(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async def on_reset(self, event) -> None:
         self.batch.reset()
-        await self._reply(update, "Batch cleared.")
+        await self._reply(event, "Batch cleared.")
 
     # -- jobs -----------------------------------------------------------
 
-    async def _go_job(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async def _go_job(self, event) -> None:
         pending = self.batch.untranscribed()
         if pending:
             job_id = new_job_id()
             write_job(self.cfg.jobs_dir, job_id, [m.filename for m in pending])
-            await update.message.reply_text(
+            await event.respond(
                 f"Transcribing {len(pending)} item(s) on the host worker; waiting…"
             )
             results = await await_result(
@@ -134,17 +128,17 @@ class BotApp:
                 ok = bool(result.get("transcript_path"))
                 mark = "ok" if ok else f"FAILED ({result.get('error')})"
                 lines.append(f"[{result['index']}] {result['name']} — {mark}")
-            await update.message.reply_text("Stage 1:\n" + "\n".join(lines))
+            await event.respond("Stage 1:\n" + "\n".join(lines))
 
         if not self.batch.media:
-            await update.message.reply_text("Batch is empty.")
+            await event.respond("Batch is empty.")
             return
         if all(m.transcript_path is None for m in self.batch.media):
-            await update.message.reply_text("Every item failed transcription. /go retries.")
+            await event.respond("Every item failed transcription. /go retries.")
             return
-        await self._stage2_job(update, context)
+        await self._stage2_job(event)
 
-    async def _stage2_job(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async def _stage2_job(self, event) -> None:
         text = build_transcript_text(self.batch.media, self.cfg.output_dir)
         system = build_system_prompt(self.cfg.metaprompt_path, self.batch)
         try:
@@ -159,55 +153,45 @@ class BotApp:
                 strip_reasoning=self.cfg.llm_strip_reasoning,
             )
         except llm.LLMError as exc:
-            await self._send_document(update, context, "transcripts.md", text)
-            await update.message.reply_text(
+            await self._send_document(event, "transcripts.md", text)
+            await event.respond(
                 f"LLM error: {exc}\nSent the raw transcripts; re-send the correction to retry."
             )
             return
         self.batch.has_output = True
-        await self._send_document(update, context, "summary.md", summary)
-        await update.message.reply_text(summary[:PREVIEW_CHARS])
+        await self._send_document(event, "summary.md", summary)
+        await event.respond(summary[:PREVIEW_CHARS])
 
-    async def _send_document(
-        self,
-        update: Update,
-        context: ContextTypes.DEFAULT_TYPE,
-        filename: str,
-        content: str,
-    ) -> None:
+    async def _send_document(self, event, filename: str, content: str) -> None:
         buf = BytesIO(content.encode())
         buf.name = filename
-        await context.bot.send_document(
-            chat_id=update.effective_chat.id, document=buf, filename=filename
-        )
+        await event.client.send_file(event.chat_id, buf, force_document=True)
 
 
-def build_application(cfg: Config) -> Application:
-    application = (
-        ApplicationBuilder()
-        .token(cfg.bot_token)
-        .base_url(f"{cfg.api_base_url}/bot")
-        .base_file_url(f"{cfg.api_base_url}/file/bot")
-        .local_mode(True)
-        .build()
-    )
-    state = BotApp(cfg)
-    application.bot_data["state"] = state  # keep a reference; also aids testing
-    only_me = filters.User(user_id=cfg.admin_user_id)
-    media = (
-        filters.VIDEO
-        | filters.AUDIO
-        | filters.VOICE
-        | filters.VIDEO_NOTE
-        | filters.Document.ALL
-    )
-    application.add_handler(CommandHandler("start", state.on_start, filters=only_me))
-    application.add_handler(CommandHandler("go", state.on_go, filters=only_me))
-    application.add_handler(CommandHandler("queue", state.on_queue, filters=only_me))
-    application.add_handler(CommandHandler("reset", state.on_reset, filters=only_me))
-    application.add_handler(MessageHandler(only_me & media, state.on_media))
-    application.add_handler(
-        MessageHandler(only_me & filters.TEXT & ~filters.COMMAND, state.on_text)
-    )
-    application.post_init = state.start_queue_worker
-    return application
+def build_client(cfg: Config) -> tuple[TelegramClient, BotApp]:
+    # ponytail: MemorySession — bot re-auths on restart (instant) and loses
+    # update catch-up across a restart; swap in a file session on a volume if
+    # missed-while-down messages ever matter.
+    client = TelegramClient(MemorySession(), cfg.api_id, cfg.api_hash)
+    state = BotApp(cfg, client)
+    mine = lambda e: e.sender_id == cfg.admin_user_id  # noqa: E731
+
+    handlers = [
+        (state.on_start, events.NewMessage(pattern=r"^/start$", func=mine)),
+        (state.on_go, events.NewMessage(pattern=r"^/go$", func=mine)),
+        (state.on_queue, events.NewMessage(pattern=r"^/queue$", func=mine)),
+        (state.on_reset, events.NewMessage(pattern=r"^/reset$", func=mine)),
+        (state.on_media, events.NewMessage(func=lambda e: mine(e) and e.message.file is not None)),
+        (
+            state.on_text,
+            events.NewMessage(
+                func=lambda e: mine(e)
+                and e.message.file is None
+                and bool(e.raw_text)
+                and not e.raw_text.startswith("/")
+            ),
+        ),
+    ]
+    for callback, event in handlers:
+        client.add_event_handler(callback, event)
+    return client, state

@@ -5,6 +5,8 @@ from src.config import load_config
 BASE = {
     "TELEGRAM_BOT_TOKEN": "t",
     "ADMIN_USER_ID": "1",
+    "TELEGRAM_API_ID": "12345",
+    "TELEGRAM_API_HASH": "h",
 }
 
 

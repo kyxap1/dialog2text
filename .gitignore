@@ -9,7 +9,7 @@ output/*
 !output/.gitkeep
 jobs/*
 !jobs/.gitkeep
-tg-data/*
-!tg-data/.gitkeep
+media/*
+!media/.gitkeep
 bot/.env
 .pytest_cache/

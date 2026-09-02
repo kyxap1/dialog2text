@@ -9,20 +9,21 @@ Design: [`../docs/superpowers/specs/2026-09-01-telegram-transcription-bot-design
 ## How it runs
 
 Transcription (`run.sh`, whisper-mlx + pyannote) needs Apple Metal, so it stays
-on the host. The bot and the local Telegram API server run under Docker Compose.
-The LLM pass calls either a remote API (Grok) or a local model served on the
-host by Docker Model Runner — see "LLM backend" below.
+on the host. The bot runs under Docker Compose and talks to Telegram over
+MTProto (Telethon), which lifts the file-download limit to 2 GB. The LLM pass
+calls either a remote API (Grok) or a local model served on the host by Docker
+Model Runner — see "LLM backend" below.
 
 ```
-Telegram ── long poll ──> bot container ──> jobs/*.job.json ──> worker.sh (host) ──> run.sh
-                              │                                       │
-                              │ <──────────── jobs/*.result.json <─────┘
-                              ▼
-                     LLM pass (Grok API │ local model) ──> summary.md
+Telegram ── MTProto ──> bot container ──> jobs/*.job.json ──> worker.sh (host) ──> run.sh
+                            │                                       │
+                            │ <──────────── jobs/*.result.json <─────┘
+                            ▼
+                   LLM pass (Grok API │ local model) ──> summary.md
 ```
 
-`jobs/` and `tg-data/` (media the local API server writes) are shared through
-bind mounts.
+The bot saves each forwarded file under `media/<message-id>/`; `media/`, `jobs/`
+and `output/` are shared with the host worker through bind mounts.
 
 ## Setup
 
@@ -30,7 +31,7 @@ bind mounts.
    - `TELEGRAM_BOT_TOKEN` — @BotFather → `/newbot`
    - `ADMIN_USER_ID` — your numeric id (@userinfobot); only this user is served
    - `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` — https://my.telegram.org → API
-     development tools (lets the local server fetch files over 20 MB)
+     development tools (Telethon needs them even in bot-token mode)
    - `LLM_PROVIDER` and its settings — see "LLM backend" below
 
 2. **Host worker** (from the repo root):

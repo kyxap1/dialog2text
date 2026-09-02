@@ -11,12 +11,14 @@ unchanged and adds an LLM post-processing pass driven by a fixed metaprompt
 The summary is iterated on in place: after the first result, any text message is
 a correction that re-runs the LLM pass over the already-transcribed batch.
 
-The laptop is not always on. When it is off, Telegram queues updates for up to
-24h and the bot catches up on reconnect.
+The laptop is not always on. Telegram queues updates for up to 24h; the bot
+catches up on reconnect after a sleep/wake. A full container restart drops the
+in-memory session, so updates missed while it was down are lost — re-forward and
+`/go` again (same tolerance as the batch not surviving a restart).
 
-The bot and the local Telegram API server run under Docker Compose.
-Transcription (`run.sh`) stays on the host; so does the LLM when the local
-backend is used — see the next section.
+The bot runs under Docker Compose and connects to Telegram over MTProto
+(Telethon). Transcription (`run.sh`) stays on the host; so does the LLM when the
+local backend is used — see the next section.
 
 The bot is a self-contained project in the `bot/` subdirectory: its own
 `Dockerfile`, `docker-compose.yml`, Python dependencies and tests. It shares no
@@ -32,17 +34,17 @@ spool protocol below.
   Docker Desktop's Linux VM on macOS cannot reach. So **Stage 1 (transcription)
   stays on the host**, run by `run.sh` exactly as today, and the local LLM
   backend runs on the host too, as a Docker Model Runner service the bot reaches
-  over HTTP. The Telegram local API server and the bot run under Docker Compose.
-  Transcription and the bot talk through a shared `jobs/` spool directory on
-  disk (protocol below).
+  over HTTP. The bot runs under Docker Compose. Transcription and the bot talk
+  through a shared `jobs/` spool directory on disk (protocol below).
 - **Large files.** Forwarded videos exceed the 20 MB Bot API download limit, so
-  a local `telegram-bot-api` server runs alongside the bot as a Compose service
-  (2 GB limit, and in local mode it writes the file to disk and hands back a
-  path — no download step). Its data dir is bind-mounted to the host so the
-  file it writes is reachable by the host transcription worker.
-- **Long polling**, not webhook: the laptop has no public endpoint and is
-  intermittently online. Polling reconnects itself across sleep/wake and
-  restarts.
+  the bot speaks MTProto via Telethon (bot-token auth) instead of the HTTP Bot
+  API — a 2 GB download limit, and the bot chooses where each file lands on
+  disk. It saves them under `media/<message-id>/`, bind-mounted to the host so
+  the transcription worker reads the same tree. No `telegram-bot-api` server and
+  no bot token in any file path.
+- **MTProto, not webhook**: the laptop has no public endpoint and is
+  intermittently online. Telethon reconnects itself across sleep/wake and
+  restarts; while the laptop is off Telegram queues updates for ~24h.
 - **No transcript chunking.** The combined transcript of a batch is fed to the
   LLM in one request. Context limits are accepted as out of scope for now; if a
   batch ever overflows, map-reduce joining is the upgrade path.
@@ -66,42 +68,40 @@ spool protocol below.
   correction inside the container. This needs no cache of its own — `run.sh`
   already writes transcripts to `output/<name>/<name>.txt`; the bot keeps the
   paths the worker reports.
-- **No inline keyboards.** Commands and plain text messages cover every action.
+- **A persistent reply keyboard** with `/queue` and `/go`; no inline keyboards.
+  The buttons just send those commands as text, so every action is still a
+  command or plain text.
 
 ## Components
 
-1. **`telegram-bot-api` local server** — Docker Compose service defined in
-   `bot/docker-compose.yml`, image `aiogram/telegram-bot-api`, started in local
-   mode (`TELEGRAM_LOCAL=true`).
-   Needs `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` from my.telegram.org. Its data
-   dir (`/var/lib/telegram-bot-api`) is bind-mounted to host `./tg-data`, so a
-   file it writes to disk in local mode is directly readable by the host
-   transcription worker — no download step.
-2. **Bot process** — Docker Compose service, built from `bot/Dockerfile` with
-   its own Python dependencies. `python-telegram-bot`, long polling, base URL
-   `http://telegram-bot-api:8081`. Responsibilities: whitelist check, batch
-   state, command handlers (`/go`, `/reset`), text-message routing (prompt
-   addition vs correction), job queue — plus writing Stage 1 job files into the
-   spool and waiting for their result files. Mounts (bind, relative to the repo
-   root — `bot/docker-compose.yml` uses `../`): `tg-data` (same path the API
-   server uses), `jobs` (spool), `output` (read transcripts), `prompts`
+1. **Bot process** — the only Docker Compose service, built from `bot/Dockerfile`
+   with its own Python dependencies. Telethon over MTProto, bot-token auth,
+   `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` from my.telegram.org, in-memory
+   session (re-auth on restart is instant). Responsibilities: whitelist check
+   (`sender_id` match, no entity resolution), downloading each forwarded file to
+   `media/<message-id>/`, batch state, command handlers (`/start`, `/go`,
+   `/queue`, `/reset`), text-message routing (prompt addition vs correction),
+   job queue — plus writing Stage 1 job files into the spool and waiting for
+   their result files. Mounts (bind, relative to the repo root —
+   `bot/docker-compose.yml` uses `../`): `media` (downloaded files, shared with
+   the worker), `jobs` (spool), `output` (read transcripts), `prompts`
    (metaprompt, read-only). `restart: unless-stopped`.
-3. **Transcription worker** — host-side `worker.sh` at the repo root, run as a
+2. **Transcription worker** — host-side `worker.sh` at the repo root, run as a
    launchd LaunchAgent. Polling loop: pick the lexically-oldest
    `jobs/*.job.json`, for each media path run `./run.sh <file>`, read
    `output/<name>/<name>.txt`, write `jobs/<id>.result.json`, delete the job
    file. `run.sh` and the Python pipeline are unchanged. One job at a time.
-4. **LLM client** — `run_prompt(system: str, text: str) -> str`, one
+3. **LLM client** — `run_prompt(system: str, text: str) -> str`, one
    OpenAI-compatible implementation for both backends; `LLM_PROVIDER` picks
    remote-API vs local. Runs inside the bot container; for `local` it calls the
    Docker Model Runner endpoint Compose injects. Mockable for tests.
-5. **`prompts/default.md`** — the metaprompt, bind-mounted read-only into the
+4. **`prompts/default.md`** — the metaprompt, bind-mounted read-only into the
    bot container and read fresh on each LLM pass, so editing it on the host
    takes effect on the next correction without a restart.
-6. **launchd LaunchAgent** — starts `worker.sh` on login. The bot itself is now
+5. **launchd LaunchAgent** — starts `worker.sh` on login. The bot itself is now
    started by Docker Compose; enable "Start Docker Desktop on login" so the
    stack comes up after a reboot.
-7. **Docker Model Runner** (only when `LLM_PROVIDER=local`) — a host service
+6. **Docker Model Runner** (only when `LLM_PROVIDER=local`) — a host service
    (Docker Desktop 4.62+) serving an MLX model on the Metal GPU over an
    OpenAI-compatible API at `host.docker.internal:12434/engines/v1`. One-time
    host setup: `docker model install-runner --backend vllm`, then
@@ -118,13 +118,13 @@ whisper-mlx/
   worker.sh                                host spool runner, under launchd
   jobs/                                    spool, shared: bot container ↔ host worker
   output/                                  run.sh transcripts, read by the bot container
-  tg-data/                                 bind mount: media the API server writes
+  media/                                   bind mount: files the bot downloads, per message id
   prompts/default.md                       metaprompt, read-only into the bot container
   bot/
     Dockerfile
-    docker-compose.yml                     telegram-bot-api + bot; mounts ../jobs, ../output, ../tg-data, ../prompts
+    docker-compose.yml                     bot only; mounts ../jobs, ../output, ../media, ../prompts
     pyproject.toml / requirements.txt      bot's own Python context
-    .env                                   bot + API config for Compose
+    .env                                   bot config for Compose
     src/…
     tests/
 ```
@@ -134,7 +134,7 @@ directories; it imports no repo code. A separate repository is possible (the
 contract is just the spool protocol) but adds a second clone and duplicated
 `jobs/`/`output/` paths for no gain at this size.
 
-Bot and API config, via `bot/.env` that Compose reads: `TELEGRAM_BOT_TOKEN`,
+Bot config, via `bot/.env` that Compose reads: `TELEGRAM_BOT_TOKEN`,
 `ADMIN_USER_ID`, `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, `LLM_PROVIDER`,
 `LLM_MODEL`, `LLM_BASE_URL`. A remote API also needs `LLM_API_KEY`; for
 `LLM_PROVIDER=local` no key is needed and `LLM_BASE_URL` points at the DMR
@@ -145,8 +145,8 @@ endpoint on the host.
 Filesystem only, no SSH, a single writer on each side.
 
 - **Job** — bot writes `jobs/<id>.job.json`:
-  `{ "media": ["<token>/videos/file_123.mp4", ...] }`. Paths are relative to the
-  `tg-data` root, so they resolve on both the bot container and the host.
+  `{ "media": ["<message-id>/file_123.mp4", ...] }`. Paths are relative to the
+  `media/` root, so they resolve on both the bot container and the host.
 - **Claim** — the worker takes the lexically-oldest `*.job.json`. No lock file:
   there is one worker and it processes one job at a time.
 - **Result** — worker writes `jobs/<id>.result.json`:
@@ -163,7 +163,7 @@ Filesystem only, no SSH, a single writer on each side.
 ## Data flow
 
 ```
-forward video/audio       → API server saves file under tg-data → path appended to batch.media
+forward video/audio       → bot downloads it to media/<message-id>/ → path appended to batch.media
 text, no output yet       → appended to batch.extra_prompt
 /go                       → write jobs/<id>.job.json; await jobs/<id>.result.json; then Stage 2. Batch is KEPT.
 text, output exists        → appended to batch.corrections, then Stage 2 re-runs (in-container, no spool)
@@ -239,7 +239,7 @@ the 75% cap leaves headroom for that.
 | Situation | Behaviour |
 |---|---|
 | Message from non-whitelisted user | Ignored silently |
-| File rejected by local server (too big / unsupported) | Error message to user; item not added to the batch |
+| Download fails (too big / network) | Error message to user; item not added to the batch |
 | One media item fails transcription | Worker sets `error` and leaves `transcript_path` null; bot notes which item failed, continues with the rest, mentions it in the final message; a later `/go` retries just that item |
 | All media items fail | Report failure; `/go` retries |
 | Worker not running / Docker can't see the spool | Job file sits in `jobs/` untouched; the bot reports "queued" and keeps waiting. It runs when the worker is back — same tolerance as the laptop being asleep |
