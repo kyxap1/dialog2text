@@ -1,7 +1,11 @@
 # Paths are relative to bot/ ; ../ is the whisper-mlx repo root.
+name: scriptorium
+
 services:
-  bot:
+  telegram:
     build: .
+    image: telegram-bot-scriptorium
+    container_name: telegram-bot-scriptorium
     env_file: .env
     environment:
       MEDIA_DIR: /app/media
