@@ -13,6 +13,11 @@ from pathlib import Path
 # Holds both URL keys and "<sha1><ext>" media keys; written by the host worker.
 TRANSCRIPT_CACHE_NAME = "transcript-cache.json"
 
+# Transport-id -> "<sha1><ext>" media name, written by whichever adapter received
+# the file. Lets a re-send skip the transfer: the content hash is only knowable
+# after the bytes arrive, so without this a repeat pays the full download again.
+MEDIA_INDEX_NAME = "media-index.json"
+
 
 def _sha1(path: Path) -> str:
     h = hashlib.sha1()
@@ -48,3 +53,18 @@ def load_transcript_cache(output_dir: Path) -> dict[str, str]:
         return json.loads((output_dir / TRANSCRIPT_CACHE_NAME).read_text())
     except (OSError, ValueError):
         return {}
+
+
+def load_media_index(output_dir: Path) -> dict[str, str]:
+    try:
+        return json.loads((output_dir / MEDIA_INDEX_NAME).read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def save_media_index(output_dir: Path, index: dict[str, str]) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    path = output_dir / MEDIA_INDEX_NAME
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(index))
+    os.replace(tmp, path)  # a crash mid-write must not truncate the index

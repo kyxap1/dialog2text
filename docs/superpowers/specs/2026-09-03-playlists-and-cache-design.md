@@ -140,7 +140,7 @@ Pure over paths, no Telethon, no `Config`.
   `{"videos": [{"id": str, "title": str}, …], "error": str | null}`.
   The worker is serialized behind whatever it is transcribing, so this one
   takes a timeout (unlike the existing waits) and the handler answers
-  `expanding playlist…` before it starts waiting.
+  `Expanding playlist…` before it starts waiting.
 
 ## Data flow
 
@@ -149,7 +149,7 @@ Pure over paths, no Telethon, no `Config`.
 ```
 paste playlist URL
   → bot: youtube.classify(url) == "playlist"
-  → bot: reply "expanding playlist…"; write_expand_job; await_expand_result
+  → bot: reply "Expanding playlist…"; write_expand_job; await_expand_result
   → worker: yt-dlp --flat-playlist
             --cookies-from-browser $YOUTUBE_BROWSER
             --no-warnings --print "%(id)s\t%(title)s" <url>
@@ -157,9 +157,9 @@ paste playlist URL
             (empty stdout / non-zero → {"videos": [], "error": "..."} )
   → bot: total = len(videos); videos = videos[:PLAYLIST_MAX]
   → bot: for each video: batch.add_media(youtube.video_url(id), title=title)
-  → bot: reply "batch of {added} videos detected"
+  → bot: reply "batch of {added} items detected"
          + ("cut from {total} to {PLAYLIST_MAX} (PLAYLIST_MAX)" if truncated)
-         + "Added [i/added] {title}" per line
+         + "[i/added] {title} — added" per line
   → /go: each watch?v=<id> runs through the worker's existing URL branch
          unchanged; one combined summary over the batch
 ```
@@ -172,16 +172,21 @@ no re-transcription.
 
 ```
 forward file(s)
-  → bot on_media: download to a temp path
-  → core.content.store(tmp, media_dir) → (name, is_new)
+  → bot on_media: arm the burst timer, start a background _store_media task
+  → _store_media: Telegram document id already mapped to an on-disk file
+                  → reuse it, state "on disk"
+                  else download to a temp path,
+                       core.content.store(tmp, media_dir) → (name, is_new),
+                       persist doc-id → name in media-index.json
   → batch.add_media(name)   (batch-level dedup already collapses a repeat)
-  → accumulator.add(sender_id, item)
-  → 2s after the last forward: one "batch of N videos detected" + list
+  → debounce_seconds after the last forward:
+      "Fetching N file(s) from Telegram…"  (only while a download is pending)
+      "batch of N items detected" + "[i/N] {name} — {new|on disk}" per line
 ```
 
 `N` counts the items actually in the batch, not the forwards received: both
 `content.store` and `add_media` collapse a repeat, so three files of which
-two are identical announce a batch of 2 and list `[1]` and `[2]`.
+two are identical announce a batch of 2 and list `[1/2]` and `[2/2]`.
 
 ### Cache eviction
 

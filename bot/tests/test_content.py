@@ -54,6 +54,14 @@ def test_load_transcript_cache_missing_is_empty(tmp_path):
     assert content.load_transcript_cache(tmp_path) == {}
 
 
+def test_media_index_round_trips_and_survives_a_truncated_file(tmp_path):
+    assert content.load_media_index(tmp_path) == {}
+    content.save_media_index(tmp_path, {"555": "deadbeef.mp4"})
+    assert content.load_media_index(tmp_path) == {"555": "deadbeef.mp4"}
+    (tmp_path / content.MEDIA_INDEX_NAME).write_text("{ broken")
+    assert content.load_media_index(tmp_path) == {}
+
+
 def test_load_transcript_cache_reads_both_key_kinds(tmp_path):
     (tmp_path / "transcript-cache.json").write_text(
         '{"https://www.youtube.com/watch?v=a": "a/a.txt", "deadbeef.mp3": "d/d.txt"}'

@@ -10,9 +10,11 @@ from src.bot import BotApp
 from tests.conftest import FakeEvent, FakeFile, FakeMessage
 
 
-def _event(text="", file=None, msg_id=1, sender_id=1, content=b"fake"):
+def _event(text="", file=None, msg_id=1, sender_id=1, content=b"fake", doc_id=None):
     return FakeEvent(
-        FakeMessage(text=text, file=file, msg_id=msg_id, content=content),
+        FakeMessage(
+            text=text, file=file, msg_id=msg_id, content=content, doc_id=doc_id
+        ),
         sender_id=sender_id,
     )
 
@@ -35,7 +37,8 @@ async def test_media_is_content_addressed_and_announced_once_per_burst(cfg):
     assert all(len(n.split(".")[0]) == 40 for n in names)  # sha1 stems
     assert e1.responses == []  # only the last event in the burst answers
     assert e2.responses == [
-        f"batch of 2 items detected\nAdded [1/2] {names[0]}\nAdded [2/2] {names[1]}"
+        "Fetching 2 file(s) from Telegram…",
+        f"batch of 2 items detected\n[1/2] {names[0]} — new\n[2/2] {names[1]} — new",
     ]
 
 
@@ -52,8 +55,45 @@ async def test_duplicate_forward_announces_the_batch_size_not_the_forward_count(
 
     assert len(list(cfg.media_dir.glob("*.mp4"))) == 2
     assert len(app.batches[1].media) == 2
-    assert events[-1].responses[0].startswith("batch of 2 items detected")
-    assert events[-1].responses[0].count("Added [") == 2
+    announce = events[-1].responses[-1]
+    assert announce.startswith("batch of 2 items detected")
+    assert announce.count("\n[") == 2
+
+
+async def test_reforward_reuses_the_download_and_skips_the_ack(cfg):
+    app = BotApp(cfg)
+    e1 = _event(file=FakeFile(name="a.mp4"), msg_id=1, content=b"V", doc_id=555)
+    await app.on_media(e1)
+    await asyncio.sleep(0.05)
+    name = app.batches[1].media[0].filename
+
+    # Same Telegram document, second burst: no re-download, no "downloading…".
+    e2 = _event(file=FakeFile(name="a.mp4"), msg_id=2, content=b"V", doc_id=555)
+    await app.on_media(e2)
+    await asyncio.sleep(0.05)
+
+    assert e2.message.downloads == 0
+    assert [m.filename for m in app.batches[1].media] == [name]
+    assert e2.responses == ["batch of 1 items detected\n[1/1] " + name + " — on disk"]
+
+
+async def test_media_index_survives_a_restart(cfg):
+    app = BotApp(cfg)
+    e1 = _event(file=FakeFile(name="a.mp4"), msg_id=1, content=b"V", doc_id=555)
+    await app.on_media(e1)
+    await asyncio.sleep(0.05)
+    name = app.batches[1].media[0].filename
+
+    # Fresh process: the index is reloaded from disk, so the re-forward of the
+    # same Telegram document still skips the download.
+    fresh = BotApp(cfg)
+    e2 = _event(file=FakeFile(name="a.mp4"), msg_id=2, content=b"V", doc_id=555)
+    await fresh.on_media(e2)
+    await asyncio.sleep(0.05)
+
+    assert e2.message.downloads == 0
+    assert fresh.batches[1].media[0].filename == name
+    assert e2.responses == ["batch of 1 items detected\n[1/1] " + name + " — on disk"]
 
 
 async def test_forwarded_photo_is_skipped_by_mime(cfg):
@@ -266,7 +306,7 @@ async def test_uncached_local_model_reports_its_size_then_the_progress(cfg, monk
     await app._stage2_job(ev)
     await worker
 
-    assert "downloading 4.0 GB first" in ev.responses[0]
+    assert "Downloading the model" in ev.responses[0] and "(4.0 GB)" in ev.responses[0]
     assert ev.responses[1] == "SUMMARY"
     assert "mlx-community/X: 3.0 GB of 4.0 GB (75%)" in status_ev.responses[0]
 
@@ -297,7 +337,7 @@ async def test_llm_error_sends_raw_transcripts_and_keeps_batch(cfg, monkeypatch)
     await app._stage2_job(ev)
 
     assert ev.client.files == [(42, "1.transcripts.md")]
-    assert any("LLM error" in r for r in ev.responses)
+    assert any("Summary failed" in r for r in ev.responses)
     assert app.batches[1].media  # batch kept
 
 
@@ -388,9 +428,9 @@ async def test_playlist_expands_into_titled_watch_urls_in_order(cfg):
         "https://www.youtube.com/watch?v=b",
     ]
     assert [m.title for m in b.media] == ["First", "Second"]
-    assert ev.responses[0] == "expanding playlist…"
+    assert ev.responses[0] == "Expanding playlist…"
     assert ev.responses[-1] == (
-        "batch of 2 items detected\nAdded [1/2] First\nAdded [2/2] Second"
+        "batch of 2 items detected\n[1/2] First — added\n[2/2] Second — added"
     )
 
 

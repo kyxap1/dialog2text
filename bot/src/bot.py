@@ -11,7 +11,7 @@ from telethon import Button, TelegramClient, events
 from telethon.sessions import MemorySession
 
 from . import llm, status, tgmd
-from .batch import Batch
+from .batch import Batch, MediaItem
 from .config import Config
 from .core import content, youtube
 from .core.debounce import Accumulator
@@ -49,7 +49,16 @@ KEYBOARD = [
 
 
 class BotApp:
-    """Holds the per-sender batches and the single job queue; methods are the handlers."""
+    """Holds the per-sender batches and the single job queue; methods are the handlers.
+
+    User-facing text follows one grammar (Telegram surface only; a REST adapter
+    would return structured status instead):
+      progress   "<Gerund> …"                 async step underway; trailing "…"
+      detection  "batch of N items detected"   head of a multi-item list
+      item       "[ref] <label> — <state>"     ref n/N or batch index; state
+                                               e.g. new | on disk | added | ok
+      failure    "<Step> failed: <reason>"
+    """
 
     def __init__(self, cfg: Config, client: TelegramClient | None = None):
         self.cfg = cfg
@@ -60,6 +69,10 @@ class BotApp:
         self._queue_task: asyncio.Task | None = None
         # A forward burst (album or loose files) collapses into one announcement.
         self.accumulator = Accumulator(self._announce_batch, cfg.debounce_seconds)
+        # Telegram document id (as str) -> content-addressed name, so a re-forward
+        # reuses the download. Persisted; grows one entry per distinct file ever
+        # forwarded (KBs), stale entries self-heal via the on-disk check below.
+        self._media_names: dict[str, str] = content.load_media_index(cfg.output_dir)
         # Set while a summary waits on a model that was not on disk, so /status
         # knows to poll the download instead of hitting the HF API every time.
         self.downloading = False
@@ -106,22 +119,41 @@ class BotApp:
         # in the update already, so skip non-media silently before downloading.
         if not (f.mime_type or "").startswith(("audio/", "video/")):
             return
-        self.cfg.media_dir.mkdir(parents=True, exist_ok=True)
-        # Keep the media suffix on the temp name: content.store hashes the file
-        # and reuses that suffix for the on-disk name.
-        tmp = self.cfg.media_dir / f".tmp-{event.sender_id}-{msg.id}{f.ext or ''}"
-        try:
-            await msg.download_media(file=str(tmp))
-        except Exception as exc:  # a 2 GB download can fail mid-stream
-            log.exception("download failed")
-            tmp.unlink(missing_ok=True)
-            await self._reply(event, f"Download failed: {exc}")
-            return
-        # Telegram filenames are unusable (any language, often absent). The file
-        # is content-addressed, so the same clip forwarded twice is one file.
-        name, _ = content.store(tmp, self.cfg.media_dir)
-        item = self._batch_for_new_item(event).add_media(name)
-        self.accumulator.add(event.sender_id, (event, item))
+        # The burst timer arms on receipt: a download can outlast
+        # debounce_seconds and split one forward into N "batch of 1" messages.
+        doc = getattr(msg, "document", None)
+        doc_id = str(doc.id) if doc is not None else None
+        task = asyncio.create_task(self._store_media(event, doc_id))
+        self.accumulator.add(event.sender_id, (event, doc_id, task))
+
+    async def _store_media(self, event, doc_id: str | None) -> tuple[MediaItem, str] | None:
+        """Download the forward (unless this exact file is already on disk) and
+        add it to the batch. Returns (item, state) where state is "new" or
+        "on disk", or None on failure.
+        """
+        msg = event.message
+        known = self._media_names.get(doc_id) if doc_id is not None else None
+        if known and (self.cfg.media_dir / known).exists():
+            name, state = known, "on disk"
+        else:
+            self.cfg.media_dir.mkdir(parents=True, exist_ok=True)
+            # content.store hashes the file and keeps this suffix for the name.
+            tmp = self.cfg.media_dir / f".tmp-{event.sender_id}-{msg.id}{msg.file.ext or ''}"
+            try:
+                await msg.download_media(file=str(tmp))
+            except Exception as exc:  # a 2 GB download can fail mid-stream
+                log.exception("download failed")
+                tmp.unlink(missing_ok=True)
+                await self._reply(event, f"Download failed: {exc}")
+                return None
+            # Telegram filenames are unusable; the on-disk name is the content
+            # hash, so the same clip forwarded twice is one file.
+            name, is_new = content.store(tmp, self.cfg.media_dir)
+            state = "new" if is_new else "on disk"
+            if doc_id is not None:
+                self._media_names[doc_id] = name
+                content.save_media_index(self.cfg.output_dir, self._media_names)
+        return self._batch_for_new_item(event).add_media(name), state
 
     async def _announce_batch(self, sender_id, entries) -> None:
         """One message per forward burst: 'batch of N' + a line per distinct item.
@@ -132,15 +164,38 @@ class BotApp:
         if not entries:
             return
         event = entries[-1][0]
+        # The burst size and which files are already stored are known before any
+        # byte moves; a fetch can run for minutes, so name it while it runs.
+        pending = [
+            e
+            for e in entries
+            if not (
+                e[1] is not None
+                and e[1] in self._media_names
+                and (self.cfg.media_dir / self._media_names[e[1]]).exists()
+            )
+        ]
+        if pending:
+            await self._reply(event, f"Fetching {len(pending)} file(s) from Telegram…")
+        results = await asyncio.gather(
+            *(task for _, _, task in entries), return_exceptions=True
+        )
         items, seen = [], set()
-        for _, item in entries:
-            if item.index not in seen:
-                seen.add(item.index)
-                items.append(item)
+        for res in results:
+            if isinstance(res, tuple):
+                item, state = res
+                if item.index not in seen:
+                    seen.add(item.index)
+                    items.append((item, state))
+            elif isinstance(res, BaseException):
+                log.error("store_media failed: %r", res)
+            # else: None — the download failed and already told the user
+        if not items:
+            return
         lines = [f"batch of {len(items)} items detected"]
         lines += [
-            f"Added [{n}/{len(items)}] {it.title or it.filename}"
-            for n, it in enumerate(items, 1)
+            f"[{n}/{len(items)}] {it.title or it.filename} — {state}"
+            for n, (it, state) in enumerate(items, 1)
         ]
         await self._reply(event, "\n".join(lines))
 
@@ -191,22 +246,22 @@ class BotApp:
             was = len(batch.media)
             item = batch.add_media(url)
             if len(batch.media) == was:
-                await self._reply(event, f"[{item.index}] already in the batch.")
+                await self._reply(event, f"[{item.index}] {url} — already in the batch.")
             else:
-                await self._reply(event, f"Added [{item.index}] {url}\nSend /go to transcribe.")
+                await self._reply(event, f"[{item.index}] {url} — added\n/go to transcribe.")
             return
         kind = self._batch(event).add_text(event.raw_text)
         if kind == "prompt":
             await self._reply(event, "Added to the prompt.")
             return
         await self.queue.put(lambda: self._stage2_job(event))
-        await self._reply(event, "Re-running the summary with your correction…")
+        await self._reply(event, "Re-running the summary…")
 
     async def _expand_playlist(self, event, url: str) -> None:
         # The container has no yt-dlp/cookies, so enumeration is a worker job.
         # The worker is serialized behind any running transcription, hence the
         # early reply and the bounded wait.
-        await self._reply(event, "expanding playlist…")
+        await self._reply(event, "Expanding playlist…")
         job_id = new_job_id()
         write_expand_job(self.cfg.jobs_dir, job_id, url)
         try:
@@ -217,12 +272,10 @@ class BotApp:
                 self.cfg.expand_timeout_seconds,
             )
         except TimeoutError:
-            await self._reply(
-                event, "Playlist expansion timed out; nothing added. Try again later."
-            )
+            await self._reply(event, "Playlist expansion timed out — nothing added.")
             return
         if result.get("error"):
-            await self._reply(event, f"Could not expand the playlist: {result['error']}")
+            await self._reply(event, f"Playlist expansion failed: {result['error']}")
             return
         videos = result.get("videos") or []
         total = len(videos)
@@ -239,7 +292,7 @@ class BotApp:
         if total > self.cfg.playlist_max:
             lines.append(f"cut from {total} to {self.cfg.playlist_max} (PLAYLIST_MAX)")
         lines += [
-            f"Added [{n}/{len(added)}] {it.title or it.filename}"
+            f"[{n}/{len(added)}] {it.title or it.filename} — added"
             for n, it in enumerate(added, 1)
         ]
         await self._reply(event, "\n".join(lines))
@@ -342,8 +395,8 @@ class BotApp:
         if download:
             self.downloading = True
             await event.respond(
-                f"{download['model']} is not on disk yet — downloading "
-                f"{_gb(download['total'])} first, once. /status shows the progress."
+                f"Downloading the model {download['model']} "
+                f"({_gb(download['total'])}) first, once — /status for progress…"
             )
         try:
             summary = await self._run_llm(system, text)
@@ -351,7 +404,7 @@ class BotApp:
             self.downloading = False
             await self._send_document(event, _doc_name(batch, "transcripts"), text)
             await event.respond(
-                f"LLM error: {exc}\nSent the raw transcripts; re-send the correction to retry."
+                f"Summary failed: {exc}\nSent the raw transcripts; re-send the correction to retry."
             )
             return
         self.downloading = False
