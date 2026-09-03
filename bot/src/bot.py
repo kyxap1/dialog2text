@@ -3,13 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import json
 import logging
-import os
 from io import BytesIO
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
 
 from telethon import Button, TelegramClient, events
 from telethon.sessions import MemorySession
@@ -17,10 +13,14 @@ from telethon.sessions import MemorySession
 from . import llm, status, tgmd
 from .batch import Batch
 from .config import Config
+from .core import content, youtube
+from .core.debounce import Accumulator
 from .spool import (
+    await_expand_result,
     await_llm_result,
     await_result,
     new_job_id,
+    write_expand_job,
     write_job,
     write_llm_job,
 )
@@ -40,35 +40,6 @@ def _doc_name(batch: Batch, suffix: str) -> str:
     )
     return f"{stem}.{suffix}.md"
 
-URL_CACHE_NAME = "url-cache.json"
-
-
-def _youtube_id(url: str) -> str | None:
-    """Video id for a watch or youtu.be link, else None. ponytail: no shorts/live."""
-    u = urlparse(url)
-    host = (u.hostname or "").removeprefix("www.").removeprefix("m.")
-    if host == "youtu.be":
-        return u.path.lstrip("/").split("/")[0] or None
-    if host == "youtube.com" or host.endswith(".youtube.com"):
-        return (parse_qs(u.query).get("v") or [None])[0]
-    return None
-
-
-def _load_url_cache(output_dir: Path) -> dict[str, str]:
-    # Written by the host worker after each URL transcription; read-only here.
-    try:
-        return json.loads((output_dir / URL_CACHE_NAME).read_text())
-    except (OSError, ValueError):
-        return {}
-
-
-def _sha1(path: Path) -> str:
-    h = hashlib.sha1()
-    with path.open("rb") as fh:
-        for chunk in iter(lambda: fh.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
 
 # Shown under every reply; the buttons just send these commands as text.
 KEYBOARD = [
@@ -87,6 +58,8 @@ class BotApp:
         self.batches: dict[int, Batch] = {}
         self.queue: asyncio.Queue = asyncio.Queue()
         self._queue_task: asyncio.Task | None = None
+        # A forward burst (album or loose files) collapses into one announcement.
+        self.accumulator = Accumulator(self._announce_batch, cfg.debounce_seconds)
         # Set while a summary waits on a model that was not on disk, so /status
         # knows to poll the download instead of hitting the HF API every time.
         self.downloading = False
@@ -134,7 +107,9 @@ class BotApp:
         if not (f.mime_type or "").startswith(("audio/", "video/")):
             return
         self.cfg.media_dir.mkdir(parents=True, exist_ok=True)
-        tmp = self.cfg.media_dir / f".{event.sender_id}_{msg.id}.part"
+        # Keep the media suffix on the temp name: content.store hashes the file
+        # and reuses that suffix for the on-disk name.
+        tmp = self.cfg.media_dir / f".tmp-{event.sender_id}-{msg.id}{f.ext or ''}"
         try:
             await msg.download_media(file=str(tmp))
         except Exception as exc:  # a 2 GB download can fail mid-stream
@@ -142,12 +117,32 @@ class BotApp:
             tmp.unlink(missing_ok=True)
             await self._reply(event, f"Download failed: {exc}")
             return
-        # Telegram filenames are unusable (any language, often absent), so the
-        # file is content-addressed. sender+msg keep the name unique per user.
-        name = f"{event.sender_id}_{msg.id}_{_sha1(tmp)[:12]}{f.ext or ''}"
-        os.replace(tmp, self.cfg.media_dir / name)
+        # Telegram filenames are unusable (any language, often absent). The file
+        # is content-addressed, so the same clip forwarded twice is one file.
+        name, _ = content.store(tmp, self.cfg.media_dir)
         item = self._batch_for_new_item(event).add_media(name)
-        await self._reply(event, f"Added [{item.index}] {name}")
+        self.accumulator.add(event.sender_id, (event, item))
+
+    async def _announce_batch(self, sender_id, entries) -> None:
+        """One message per forward burst: 'batch of N' + a line per distinct item.
+
+        N is the batch size, not the forward count: content.store and add_media
+        both collapse a repeat, so two identical files announce one item.
+        """
+        if not entries:
+            return
+        event = entries[-1][0]
+        items, seen = [], set()
+        for _, item in entries:
+            if item.index not in seen:
+                seen.add(item.index)
+                items.append(item)
+        lines = [f"batch of {len(items)} videos detected"]
+        lines += [
+            f"Added [{n}/{len(items)}] {it.title or it.filename}"
+            for n, it in enumerate(items, 1)
+        ]
+        await self._reply(event, "\n".join(lines))
 
     async def on_status(self, event) -> None:
         lines = [f"Queue: {self.queue.qsize()} job(s) waiting."]
@@ -184,11 +179,14 @@ class BotApp:
         # A lone URL is a transcription source, but only YouTube (run.sh feeds it
         # to yt-dlp); a URL inside a sentence stays a prompt/correction.
         if len(text.split()) == 1 and text.startswith(("http://", "https://")):
-            vid = _youtube_id(text)
-            if vid is None:
+            kind = youtube.classify(text)
+            if kind == "playlist":
+                await self._expand_playlist(event, text)
+                return
+            if kind == "other":
                 await self._reply(event, "Only YouTube links are supported.")
                 return
-            url = f"https://www.youtube.com/watch?v={vid}"
+            url = youtube.video_url(youtube.video_id(text))
             batch = self._batch_for_new_item(event)
             was = len(batch.media)
             item = batch.add_media(url)
@@ -204,6 +202,48 @@ class BotApp:
         await self.queue.put(lambda: self._stage2_job(event))
         await self._reply(event, "Re-running the summary with your correction…")
 
+    async def _expand_playlist(self, event, url: str) -> None:
+        # The container has no yt-dlp/cookies, so enumeration is a worker job.
+        # The worker is serialized behind any running transcription, hence the
+        # early reply and the bounded wait.
+        await self._reply(event, "expanding playlist…")
+        job_id = new_job_id()
+        write_expand_job(self.cfg.jobs_dir, job_id, url)
+        try:
+            result = await await_expand_result(
+                self.cfg.jobs_dir,
+                job_id,
+                self.cfg.result_poll_seconds,
+                self.cfg.expand_timeout_seconds,
+            )
+        except TimeoutError:
+            await self._reply(
+                event, "Playlist expansion timed out; nothing added. Try again later."
+            )
+            return
+        if result.get("error"):
+            await self._reply(event, f"Could not expand the playlist: {result['error']}")
+            return
+        videos = result.get("videos") or []
+        total = len(videos)
+        videos = videos[: self.cfg.playlist_max]
+        if not videos:
+            await self._reply(event, "The playlist has no videos.")
+            return
+        batch = self._batch_for_new_item(event)
+        added = [
+            batch.add_media(youtube.video_url(v["id"]), title=v.get("title"))
+            for v in videos
+        ]
+        lines = [f"batch of {len(added)} videos detected"]
+        if total > self.cfg.playlist_max:
+            lines.append(f"cut from {total} to {self.cfg.playlist_max} (PLAYLIST_MAX)")
+        lines += [
+            f"Added [{n}/{len(added)}] {it.title or it.filename}"
+            for n, it in enumerate(added, 1)
+        ]
+        await self._reply(event, "\n".join(lines))
+
     async def on_go(self, event) -> None:
         ahead = self.queue.qsize()
         await self.queue.put(lambda: self._go_job(event))
@@ -217,8 +257,11 @@ class BotApp:
     # -- jobs -----------------------------------------------------------
 
     def _resolve_cached(self, batch: Batch) -> int:
-        """Fill transcript_path for URLs already transcribed on a past run."""
-        cache = _load_url_cache(self.cfg.output_dir)
+        """Fill transcript_path for sources already transcribed on a past run.
+
+        Keys are URLs or "<sha1><ext>" media names, both == MediaItem.filename.
+        """
+        cache = content.load_transcript_cache(self.cfg.output_dir)
         hits = 0
         for m in batch.media:
             path = cache.get(m.filename) if m.transcript_path is None else None

@@ -11,6 +11,14 @@ def test_media_keeps_forward_order_and_1_based_index():
     ]
 
 
+def test_add_media_carries_an_optional_title_kept_on_re_add():
+    b = Batch()
+    b.add_media("https://www.youtube.com/watch?v=a", title="Hello")
+    assert b.media[0].title == "Hello"
+    b.add_media("https://www.youtube.com/watch?v=a", title="Different")
+    assert len(b.media) == 1 and b.media[0].title == "Hello"
+
+
 def test_text_is_extra_prompt_before_output_and_correction_after():
     b = Batch()
     assert b.add_text("use bullet points") == "prompt"

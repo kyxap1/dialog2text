@@ -25,9 +25,17 @@ Telegram ── MTProto ──> bot container ──> jobs/*.job.json ──> wo
                      └── local model: jobs/*.llm.json ──> worker.sh ──> mlx-lm
 ```
 
-The bot saves each forwarded file as `media/<sender-id>_<message-id>_<hash>.<ext>`;
-`media/`, `jobs/` and `output/` are shared with the host worker through bind
+The bot saves each forwarded file as `media/<sha1>.<ext>` — content-addressed,
+so the same clip forwarded twice is stored and transcribed once. `media/` and
+`input/` (YouTube audio) are FIFO-trimmed by the worker to `CACHE_MAX_GB`
+(host `.env`, default 100) before each job; transcripts in `output/` are never
+evicted, so a re-send stays free even after the blob is gone. `media/`,
+`jobs/`, `output/` and `input/` are shared with the host worker through bind
 mounts.
+
+Playlist links are enumerated by the host worker (`yt-dlp --flat-playlist`,
+which has the browser cookies the container lacks) and expanded by the bot into
+one `watch?v=` item per video, capped at `PLAYLIST_MAX`.
 
 ## Setup
 
@@ -107,7 +115,9 @@ like transcription does.
 
 | | |
 |---|---|
-| forward video/audio | added to the batch (the first one after a summary starts a fresh batch) |
+| forward video/audio | added to the batch (the first one after a summary starts a fresh batch); a burst is announced as one "batch of N" |
+| YouTube video link | added to the batch |
+| YouTube playlist link | every video (up to `PLAYLIST_MAX`, default 100) added as its own item; one combined summary |
 | text (before first summary) | added to the prompt |
 | `/go` | transcribe new items, then summarise; the batch is kept |
 | `/retry` | re-run transcription for items that failed |

@@ -58,6 +58,12 @@ class Config:
     # budget, leaving a reply that is all reasoning and no answer.
     llm_thinking: bool
     result_poll_seconds: float
+    # Playlist expansion: cap on videos added, and how long to wait for the
+    # worker (serialized behind any running transcription) to enumerate one.
+    playlist_max: int
+    expand_timeout_seconds: float
+    # Seconds of quiet after the last forward before the "batch of N" message.
+    debounce_seconds: float
 
 
 def load_config() -> Config:
@@ -83,4 +89,7 @@ def load_config() -> Config:
         llm_strip_reasoning=_env_bool("LLM_STRIP_REASONING", True),
         llm_thinking=_env_bool("LLM_THINKING", False),
         result_poll_seconds=float(env.get("RESULT_POLL_SECONDS", "2")),
+        playlist_max=int(env.get("PLAYLIST_MAX", "100")),
+        expand_timeout_seconds=float(env.get("EXPAND_TIMEOUT_SECONDS", "300")),
+        debounce_seconds=float(env.get("DEBOUNCE_SECONDS", "2")),
     )

@@ -101,7 +101,18 @@ speaker_args=()
 
 for file in "${files[@]}"; do
   name=$(basename "$file")
-  out="$OUTPUT_DIR/${name%.*}"
+  stem="${name%.*}"
+  out="$OUTPUT_DIR/$stem"
+  txt="$out/$stem.txt"
+  # A content-addressed media file (40-hex stem) already transcribed: the bytes
+  # can't have changed, so reuse it. A URL's stem is the video title, not a
+  # hash, so URLs still go through yt-dlp's duration check above.
+  if [ "${#stem}" -eq 40 ] && [[ "$stem" =~ ^[0-9a-f]+$ ]] && [ -f "$txt" ]; then
+    echo "==> cached transcript $txt"
+    echo "TRANSCRIPT: $txt"
+    if [ "$SHOW_RESULT" = "1" ]; then echo "--- $txt ---"; cat "$txt"; fi
+    continue
+  fi
   mkdir -p "$out"
   echo "==> $name"
   if [[ "$MODEL" == parakeet* ]]; then
@@ -119,7 +130,6 @@ for file in "${files[@]}"; do
       --diarize "${speaker_args[@]}"
   fi
 
-  txt="$out/${name%.*}.txt"
   # Machine-readable so the spool worker can find the transcript for a URL job,
   # where the output stem is the video title and only known after yt-dlp runs.
   echo "TRANSCRIPT: $txt"

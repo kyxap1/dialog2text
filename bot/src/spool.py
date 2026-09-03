@@ -33,6 +33,10 @@ def write_job(jobs_dir: Path, job_id: str, media: list[str]) -> Path:
     return _write(jobs_dir, f"{job_id}.job.json", {"media": media})
 
 
+def write_expand_job(jobs_dir: Path, job_id: str, url: str) -> Path:
+    return _write(jobs_dir, f"{job_id}.expand.json", {"url": url})
+
+
 def write_llm_job(
     jobs_dir: Path, job_id: str, model: str, system: str, text: str, thinking: bool
 ) -> Path:
@@ -62,3 +66,23 @@ async def await_llm_result(
     jobs_dir: Path, job_id: str, poll_seconds: float = 2.0
 ) -> dict:
     return await _await_result(jobs_dir, job_id, poll_seconds)
+
+
+async def await_expand_result(
+    jobs_dir: Path, job_id: str, poll_seconds: float = 2.0, timeout: float = 300.0
+) -> dict:
+    """Wait for a playlist-expand result. Raises TimeoutError past `timeout`.
+
+    Unlike the other waits this one bounds the wait: the worker is serialized
+    behind whatever it is transcribing, which can be a long batch.
+    Result shape: {"videos": [{"id": str, "title": str}, …], "error": str | null}.
+    """
+    path = jobs_dir / f"{job_id}.result.json"
+    deadline = asyncio.get_running_loop().time() + timeout
+    while not path.exists():
+        if asyncio.get_running_loop().time() >= deadline:
+            raise TimeoutError(f"expand {job_id} timed out after {timeout}s")
+        await asyncio.sleep(poll_seconds)
+    payload = json.loads(path.read_text())
+    path.unlink(missing_ok=True)
+    return payload

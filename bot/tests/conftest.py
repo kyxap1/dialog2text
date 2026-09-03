@@ -21,15 +21,17 @@ class FakeClient:
 
 
 class FakeMessage:
-    def __init__(self, text="", file=None, msg_id=1):
+    def __init__(self, text="", file=None, msg_id=1, content=b"fake"):
         self.raw_text = text
         self.file = file
         self.id = msg_id
         self.media = object() if file is not None else None
+        # Bytes the fake download writes; distinct content -> distinct hash.
+        self._content = content
 
     async def download_media(self, file):
         Path(file).parent.mkdir(parents=True, exist_ok=True)
-        Path(file).write_bytes(b"fake")
+        Path(file).write_bytes(self._content)
         return file
 
 
@@ -67,4 +69,7 @@ def cfg(tmp_path: Path) -> Config:
         llm_strip_reasoning=True,
         llm_thinking=False,
         result_poll_seconds=0.01,
+        playlist_max=100,
+        expand_timeout_seconds=1.0,
+        debounce_seconds=0.01,
     )
