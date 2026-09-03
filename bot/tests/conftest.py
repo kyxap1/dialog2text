@@ -65,5 +65,6 @@ def cfg(tmp_path: Path) -> Config:
         llm_model="grok-test",
         llm_base_url="http://x/v1",
         llm_strip_reasoning=True,
+        llm_thinking=False,
         result_poll_seconds=0.01,
     )

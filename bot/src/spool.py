@@ -34,10 +34,12 @@ def write_job(jobs_dir: Path, job_id: str, media: list[str]) -> Path:
 
 
 def write_llm_job(
-    jobs_dir: Path, job_id: str, model: str, system: str, text: str
+    jobs_dir: Path, job_id: str, model: str, system: str, text: str, thinking: bool
 ) -> Path:
     return _write(
-        jobs_dir, f"{job_id}.llm.json", {"model": model, "system": system, "text": text}
+        jobs_dir,
+        f"{job_id}.llm.json",
+        {"model": model, "system": system, "text": text, "thinking": thinking},
     )
 
 

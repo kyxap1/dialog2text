@@ -275,7 +275,12 @@ class BotApp:
             )
         job_id = new_job_id()
         write_llm_job(
-            self.cfg.jobs_dir, job_id, self.cfg.llm_model, system, text
+            self.cfg.jobs_dir,
+            job_id,
+            self.cfg.llm_model,
+            system,
+            text,
+            self.cfg.llm_thinking,
         )
         result = await await_llm_result(
             self.cfg.jobs_dir, job_id, self.cfg.result_poll_seconds

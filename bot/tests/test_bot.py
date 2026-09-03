@@ -192,6 +192,7 @@ async def test_local_provider_hands_stage2_to_the_worker(cfg, monkeypatch):
     await worker
 
     assert job["model"] == "mlx-community/X"
+    assert job["thinking"] is False
     assert job["text"] == "=== [1] 1_1_x.mp4 ===\n[SPEAKER_00]: hi"
     assert "BASE PROMPT" in job["system"]
     assert ev.responses == ["SUMMARY"]  # the reasoning block is stripped

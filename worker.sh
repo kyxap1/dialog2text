@@ -106,6 +106,9 @@ try:
             {"role": "user", "content": job["text"]},
         ],
         add_generation_prompt=True,
+        # Qwen and friends open <think> in the prompt itself; with thinking off
+        # the model answers straight away.
+        enable_thinking=job.get("thinking", False),
     )
     payload = {"summary": generate(model, tokenizer, prompt, max_tokens=int(max_tokens))}
 except Exception as exc:

@@ -51,8 +51,12 @@ class Config:
     llm_api_key: str
     llm_model: str
     llm_base_url: str
-    # Strip a reasoning model's <think> block from its reply; thinking stays on.
+    # Strip a reasoning model's <think> block from its reply.
     llm_strip_reasoning: bool
+    # Let a reasoning model think before answering. Off: structuring a transcript
+    # gains nothing from it, and the chain of thought alone can exhaust the token
+    # budget, leaving a reply that is all reasoning and no answer.
+    llm_thinking: bool
     result_poll_seconds: float
 
 
@@ -77,5 +81,6 @@ def load_config() -> Config:
         llm_model=env.get("LLM_MODEL", "grok-beta"),
         llm_base_url=env.get("LLM_BASE_URL") or _PROVIDER_BASE_URL.get(provider, ""),
         llm_strip_reasoning=_env_bool("LLM_STRIP_REASONING", True),
+        llm_thinking=_env_bool("LLM_THINKING", False),
         result_poll_seconds=float(env.get("RESULT_POLL_SECONDS", "2")),
     )
