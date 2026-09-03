@@ -58,6 +58,7 @@ def cfg(tmp_path: Path) -> Config:
         media_dir=tmp_path / "media",
         jobs_dir=tmp_path / "jobs",
         output_dir=tmp_path / "output",
+        models_dir=tmp_path / "models",
         metaprompt_path=metaprompt,
         llm_provider="grok",
         llm_api_key="k",

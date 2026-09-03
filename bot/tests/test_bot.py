@@ -4,7 +4,7 @@ from dataclasses import replace
 
 import pytest
 
-from src import llm
+from src import llm, status
 from src.batch import Batch
 from src.bot import BotApp
 from tests.conftest import FakeEvent, FakeFile, FakeMessage
@@ -167,9 +167,10 @@ async def test_correction_reruns_stage2_only_no_job_file_no_stage1(cfg, monkeypa
     assert not cfg.jobs_dir.exists() or not list(cfg.jobs_dir.iterdir())
 
 
-async def test_local_provider_hands_stage2_to_the_worker(cfg):
+async def test_local_provider_hands_stage2_to_the_worker(cfg, monkeypatch):
     (cfg.output_dir / "1").mkdir(parents=True)
     (cfg.output_dir / "1" / "1.txt").write_text("[SPEAKER_00]: hi")
+    _model(cfg, "mlx-community/X", have=100, total=100, monkeypatch=monkeypatch)
     app = BotApp(replace(cfg, llm_provider="local", llm_model="mlx-community/X"))
     b = _batch(app)
     b.add_media("1_1_x.mp4")
@@ -195,6 +196,55 @@ async def test_local_provider_hands_stage2_to_the_worker(cfg):
     assert "BASE PROMPT" in job["system"]
     assert ev.responses == ["SUMMARY"]  # the reasoning block is stripped
     assert not list(cfg.jobs_dir.iterdir())
+
+
+def _model(cfg, repo, have, total, monkeypatch):
+    """Fake an HF cache holding `have` of the repo's `total` bytes."""
+    cached = cfg.models_dir / f"models--{repo.replace('/', '--')}"
+    cached.mkdir(parents=True)
+    (cached / "weights").write_bytes(b"x" * have)
+    monkeypatch.setattr(status, "_repo_bytes", lambda _: total)
+
+
+async def test_uncached_local_model_reports_its_size_then_the_progress(cfg, monkeypatch):
+    (cfg.output_dir / "1").mkdir(parents=True)
+    (cfg.output_dir / "1" / "1.txt").write_text("[SPEAKER_00]: hi")
+    _model(cfg, "mlx-community/X", have=3_000_000_000, total=4_000_000_000,
+           monkeypatch=monkeypatch)
+    app = BotApp(replace(cfg, llm_provider="local", llm_model="mlx-community/X"))
+    b = _batch(app)
+    b.add_media("1_1_x.mp4")
+    b.media[0].transcript_path = "1/1.txt"
+
+    status_ev = _event()
+
+    async def fake_worker():
+        while not (jobs := list(cfg.jobs_dir.glob("*.llm.json"))):
+            await asyncio.sleep(0.01)
+        # /status is answered while the summary job is still out with the worker.
+        await app.on_status(status_ev)
+        result = cfg.jobs_dir / jobs[0].name.replace(".llm.json", ".result.json")
+        result.write_text(json.dumps({"summary": "SUMMARY"}))
+        jobs[0].unlink()
+
+    worker = asyncio.create_task(fake_worker())
+    ev = _event()
+    await app._stage2_job(ev)
+    await worker
+
+    assert "downloading 4.0 GB first" in ev.responses[0]
+    assert ev.responses[1] == "SUMMARY"
+    assert "mlx-community/X: 3.0 GB of 4.0 GB (75%)" in status_ev.responses[0]
+
+
+async def test_status_stays_quiet_about_a_model_already_on_disk(cfg, monkeypatch):
+    _model(cfg, "mlx-community/X", have=100, total=100, monkeypatch=monkeypatch)
+    app = BotApp(replace(cfg, llm_provider="local", llm_model="mlx-community/X"))
+    app.downloading = True
+    ev = _event()
+    await app.on_status(ev)
+
+    assert ev.responses == ["Queue: 0 job(s) waiting."]
 
 
 async def test_llm_error_sends_raw_transcripts_and_keeps_batch(cfg, monkeypatch):

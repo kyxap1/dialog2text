@@ -43,6 +43,9 @@ class Config:
     media_dir: Path
     jobs_dir: Path
     output_dir: Path
+    # The host's Hugging Face cache, read-only: the bot only checks whether a
+    # local LLM is already there before a job stalls on a multi-GB download.
+    models_dir: Path
     metaprompt_path: Path
     llm_provider: str
     llm_api_key: str
@@ -64,6 +67,7 @@ def load_config() -> Config:
         media_dir=Path(env.get("MEDIA_DIR", "/app/media")),
         jobs_dir=Path(env.get("JOBS_DIR", "/app/jobs")),
         output_dir=Path(env.get("OUTPUT_DIR", "/app/output")),
+        models_dir=Path(env.get("MODELS_DIR", "/app/models")),
         metaprompt_path=Path(env.get("METAPROMPT_PATH", "/app/prompts/default.md")),
         llm_provider=provider,
         # A model running on the host needs no key.

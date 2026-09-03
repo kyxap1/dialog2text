@@ -112,6 +112,7 @@ like transcription does.
 | `/go` | transcribe new items, then summarise; the batch is kept |
 | `/retry` | re-run transcription for items that failed |
 | text (after a summary) | correction — re-runs the summary with all corrections so far |
+| `/status` | queued jobs, and how far a first-time model download got |
 | `/reset` | clear the batch |
 
 ## Tests

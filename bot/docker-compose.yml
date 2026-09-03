@@ -11,11 +11,13 @@ services:
       MEDIA_DIR: /app/media
       JOBS_DIR: /app/jobs
       OUTPUT_DIR: /app/output
+      MODELS_DIR: /app/models
       METAPROMPT_PATH: /app/prompts/default.md
     volumes:
       - ../media:/app/media
       - ../jobs:/app/jobs
       - ../output:/app/output
+      - ../models:/app/models:ro
       - ../prompts:/app/prompts:ro
     # Reach a host-side service (an OpenAI-compatible LLM, say) by name.
     extra_hosts:

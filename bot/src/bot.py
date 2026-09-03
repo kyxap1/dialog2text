@@ -14,7 +14,7 @@ from urllib.parse import parse_qs, urlparse
 from telethon import Button, TelegramClient, events
 from telethon.sessions import MemorySession
 
-from . import llm
+from . import llm, status
 from .batch import Batch
 from .config import Config
 from .spool import (
@@ -27,6 +27,10 @@ from .spool import (
 from .stage2 import build_system_prompt, build_transcript_text
 
 log = logging.getLogger("bot")
+
+
+def _gb(n: int) -> str:
+    return f"{n / 1e9:.1f} GB"
 
 PREVIEW_CHARS = 800
 
@@ -81,6 +85,9 @@ class BotApp:
         self.batches: dict[int, Batch] = {}
         self.queue: asyncio.Queue = asyncio.Queue()
         self._queue_task: asyncio.Task | None = None
+        # Set while a summary waits on a model that was not on disk, so /status
+        # knows to poll the download instead of hitting the HF API every time.
+        self.downloading = False
 
     def _batch(self, event) -> Batch:
         return self.batches.setdefault(event.sender_id, Batch())
@@ -138,6 +145,24 @@ class BotApp:
         os.replace(tmp, self.cfg.media_dir / name)
         item = self._batch_for_new_item(event).add_media(name)
         await self._reply(event, f"Added [{item.index}] {name}")
+
+    async def on_status(self, event) -> None:
+        lines = [f"Queue: {self.queue.qsize()} job(s) waiting."]
+        download = await self._download_status() if self.downloading else None
+        if download:
+            done, total = download["bytes"], download["total"]
+            lines.append(
+                f"{download['model']}: {_gb(done)} of {_gb(total)}"
+                f" ({done * 100 // total}%)"
+            )
+        await self._reply(event, "\n".join(lines))
+
+    async def _download_status(self) -> dict | None:
+        if self.cfg.llm_provider != "local":
+            return None
+        return await asyncio.to_thread(
+            status.model_download, self.cfg.models_dir, self.cfg.llm_model
+        )
 
     async def on_queue(self, event) -> None:
         await self._reply(event, self._batch_lines(self._batch(event)))
@@ -264,14 +289,23 @@ class BotApp:
         batch = self._batch(event)
         text = build_transcript_text(batch.media, self.cfg.output_dir)
         system = build_system_prompt(self.cfg.metaprompt_path, batch)
+        download = await self._download_status()
+        if download:
+            self.downloading = True
+            await event.respond(
+                f"{download['model']} is not on disk yet — downloading "
+                f"{_gb(download['total'])} first, once. /status shows the progress."
+            )
         try:
             summary = await self._run_llm(system, text)
         except llm.LLMError as exc:
+            self.downloading = False
             await self._send_document(event, "transcripts.md", text)
             await event.respond(
                 f"LLM error: {exc}\nSent the raw transcripts; re-send the correction to retry."
             )
             return
+        self.downloading = False
         batch.has_output = True
         await self._send_document(event, "summary.md", summary)
         await event.respond(summary[:PREVIEW_CHARS])
@@ -296,6 +330,7 @@ def build_client(cfg: Config) -> tuple[TelegramClient, BotApp]:
         # routes to /go — transcription is idempotent, /go re-runs only failures.
         (state.on_go, events.NewMessage(pattern=r"^/(go|retry)$", func=mine)),
         (state.on_queue, events.NewMessage(pattern=r"^/queue$", func=mine)),
+        (state.on_status, events.NewMessage(pattern=r"^/status$", func=mine)),
         (state.on_reset, events.NewMessage(pattern=r"^/reset$", func=mine)),
         (state.on_media, events.NewMessage(func=lambda e: mine(e) and e.message.file is not None)),
         (
