@@ -12,9 +12,11 @@ mkdir -p "$tmp/jobs" "$tmp/media" "$tmp/output"
 
 cat >"$tmp/fake-run.sh" <<'SH'
 #!/usr/bin/env bash
+case "$1" in *FAIL*) echo "boom" >&2; exit 3;; esac
 name=$(basename "$1"); stem="${name%.*}"
 mkdir -p "$OUTPUT_DIR/$stem"
 printf '[SPEAKER_00]: hello\n' >"$OUTPUT_DIR/$stem/$stem.txt"
+echo "TRANSCRIPT: $OUTPUT_DIR/$stem/$stem.txt"
 SH
 chmod +x "$tmp/fake-run.sh"
 
@@ -23,6 +25,8 @@ export RUN_SH="$tmp/fake-run.sh" PY="${PY:-.venv/bin/python}"
 
 printf '{"media": ["5_77_abc123def456.mp4"]}' >"$tmp/jobs/20260101T000000-aaaaaaaa.job.json"
 printf 'not json'                            >"$tmp/jobs/20260101T000001-bbbbbbbb.job.json"
+printf '{"media": ["https://youtu.be/xY9"]}' >"$tmp/jobs/20260101T000002-cccccccc.job.json"
+printf '{"media": ["FAIL.mp4"]}'             >"$tmp/jobs/20260101T000003-dddddddd.job.json"
 # No weights here, so the llm branch is checked on its failure path: the point
 # is that a broken job still produces a result file instead of stalling the bot.
 printf '{"model": "/nope", "system": "s", "text": "t"}' \
@@ -38,7 +42,7 @@ import glob, json, os, sys
 
 jobs_dir = sys.argv[1]
 results = sorted(glob.glob(os.path.join(jobs_dir, "*.result.json")))
-assert len(results) == 3, results
+assert len(results) == 5, results
 
 good = json.load(open(results[0]))["results"]
 assert good == [{"index": 1, "name": "5_77_abc123def456.mp4",
@@ -47,8 +51,19 @@ assert good == [{"index": 1, "name": "5_77_abc123def456.mp4",
 bad = json.load(open(results[1]))["results"]
 assert bad[0]["transcript_path"] is None and bad[0]["error"], bad
 
-llm = json.load(open(results[2]))
+url = json.load(open(results[2]))["results"]
+assert url == [{"index": 1, "name": "xY9",
+                "transcript_path": "xY9/xY9.txt", "error": None}], url
+
+fail = json.load(open(results[3]))["results"]
+assert fail[0]["transcript_path"] is None, fail
+assert fail[0]["error"] == "run.sh exited 3: boom", fail
+
+llm = json.load(open(results[4]))
 assert "summary" not in llm and llm["error"], llm
+
+cache = json.load(open(os.path.join(os.path.dirname(jobs_dir), "output", "url-cache.json")))
+assert cache == {"https://youtu.be/xY9": "xY9/xY9.txt"}, cache
 
 leftover = [
     p for p in glob.glob(os.path.join(jobs_dir, "*.json"))

@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import os
 from io import BytesIO
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 from telethon import Button, TelegramClient, events
 from telethon.sessions import MemorySession
@@ -27,6 +29,28 @@ from .stage2 import build_system_prompt, build_transcript_text
 log = logging.getLogger("bot")
 
 PREVIEW_CHARS = 800
+
+
+URL_CACHE_NAME = "url-cache.json"
+
+
+def _youtube_id(url: str) -> str | None:
+    """Video id for a watch or youtu.be link, else None. ponytail: no shorts/live."""
+    u = urlparse(url)
+    host = (u.hostname or "").removeprefix("www.").removeprefix("m.")
+    if host == "youtu.be":
+        return u.path.lstrip("/").split("/")[0] or None
+    if host == "youtube.com" or host.endswith(".youtube.com"):
+        return (parse_qs(u.query).get("v") or [None])[0]
+    return None
+
+
+def _load_url_cache(output_dir: Path) -> dict[str, str]:
+    # Written by the host worker after each URL transcription; read-only here.
+    try:
+        return json.loads((output_dir / URL_CACHE_NAME).read_text())
+    except (OSError, ValueError):
+        return {}
 
 
 def _sha1(path: Path) -> str:
@@ -128,7 +152,24 @@ class BotApp:
         )
 
     async def on_text(self, event) -> None:
-        kind = self.batch.add_text(event.raw_text)
+        text = event.raw_text.strip()
+        # A lone URL is a transcription source, but only YouTube (run.sh feeds it
+        # to yt-dlp); a URL inside a sentence stays a prompt/correction.
+        if len(text.split()) == 1 and text.startswith(("http://", "https://")):
+            vid = _youtube_id(text)
+            if vid is None:
+                await self._reply(event, "Only YouTube links are supported.")
+                return
+            url = f"https://www.youtube.com/watch?v={vid}"
+            batch = self._batch_for_new_item(event)
+            was = len(batch.media)
+            item = batch.add_media(url)
+            if len(batch.media) == was:
+                await self._reply(event, f"[{item.index}] already in the batch.")
+            else:
+                await self._reply(event, f"Added [{item.index}] {url}\nSend /go to transcribe.")
+            return
+        kind = self._batch(event).add_text(event.raw_text)
         if kind == "prompt":
             await self._reply(event, "Added to the prompt.")
             return
@@ -149,8 +190,22 @@ class BotApp:
 
     # -- jobs -----------------------------------------------------------
 
+    def _resolve_cached(self, batch: Batch) -> int:
+        """Fill transcript_path for URLs already transcribed on a past run."""
+        cache = _load_url_cache(self.cfg.output_dir)
+        hits = 0
+        for m in batch.media:
+            path = cache.get(m.filename) if m.transcript_path is None else None
+            if path and (self.cfg.output_dir / path).exists():
+                m.transcript_path = path
+                hits += 1
+        return hits
+
     async def _go_job(self, event) -> None:
         batch = self._batch(event)
+        cached = self._resolve_cached(batch)
+        if cached:
+            await event.respond(f"{cached} already transcribed (cached).")
         pending = batch.untranscribed()
         if pending:
             job_id = new_job_id()
@@ -175,6 +230,8 @@ class BotApp:
         if all(m.transcript_path is None for m in batch.media):
             await event.respond("Every item failed transcription. /go retries.")
             return
+        if not pending:
+            await event.respond("Re-running the summary…")
         await self._stage2_job(event)
 
     async def _run_llm(self, system: str, text: str) -> str:

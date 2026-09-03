@@ -82,7 +82,7 @@ The settings live at the top of `run.sh` — open it in any text editor and chan
 | `FORMAT`          | `txt`          | set to `all` to also get `.srt`/`.vtt`/`.tsv`/`.json`           |
 | `CHUNK_DURATION`  | `180`          | Parakeet only: seconds of audio per encoder pass — lower it if long files run out of memory |
 | `OUTPUT_DIR`       | `output`       | where results are written                                      |
-| `YOUTUBE_BROWSER`  | `chrome`       | browser to read cookies from when downloading YouTube URLs      |
+| `YOUTUBE_BROWSER`  | `firefox`      | browser to read cookies from when downloading YouTube URLs      |
 | `SHOW_RESULT`      | `1`            | print each transcript to the terminal when done                 |
 | `CPU_THREADS`      | *(auto)*       | CPU threads to use — auto-calculated as 75% of what's currently free |
 | `MEM_LIMIT_BYTES`  | *(auto)*       | memory cap for the models — auto-calculated as 75% of what's currently free |

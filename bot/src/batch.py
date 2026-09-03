@@ -23,6 +23,10 @@ class Batch:
     has_output: bool = False
 
     def add_media(self, filename: str) -> MediaItem:
+        # Same source twice in one batch (two links to one video) is one item.
+        for existing in self.media:
+            if existing.filename == filename:
+                return existing
         item = MediaItem(index=len(self.media) + 1, filename=filename)
         self.media.append(item)
         return item

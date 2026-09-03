@@ -56,6 +56,24 @@ os.replace(tmp, result_file)
 PY
 }
 
+_cache_url() {
+  # Record <url> -> <transcript rel path> in output/url-cache.json so the bot
+  # can skip the worker next time the same video is sent.
+  "$PY" - "$OUTPUT_DIR/url-cache.json" "$1" "$2" <<'PY'
+import json, os, sys
+path, url, rel = sys.argv[1:4]
+try:
+    data = json.load(open(path))
+except (OSError, ValueError):
+    data = {}
+data[url] = rel
+tmp = path + ".tmp"
+with open(tmp, "w") as fh:
+    json.dump(data, fh, indent=1, sort_keys=True)
+os.replace(tmp, path)
+PY
+}
+
 process_llm_job() {
   # Stage 2 runs here rather than in the bot container: MLX needs the Mac GPU,
   # which Docker on macOS does not pass through. The weights are loaded per job
@@ -91,6 +109,15 @@ os.replace(tmp, result_file)
 PY
   rm -f "$job"
 }
+
+_fail_reason() {
+  # run.sh exit code + its last output line: the Telegram reply carries the
+  # whole story, since the host log file isn't reachable from the chat.
+  local rc="$1" log="$2" last=""
+  [ -s "$log" ] && last=$(tail -n1 "$log")
+  echo "run.sh exited $rc${last:+: $last}"
+}
+
 process_job() {
   local job="$1"
   local id result media_raw
@@ -106,20 +133,43 @@ process_job() {
   local media=() records=()
   [ -n "$media_raw" ] && mapfile -t media <<<"$media_raw"
 
-  local i=0 rel name stem txt log
+  local i=0 rc rel name stem txt rel_txt log
   for rel in "${media[@]}"; do
     i=$((i + 1))
+    log="$JOBS_DIR/run.$id.$i.log"
+    echo "==> [$i] $rel"
+
+    # A URL is handed to run.sh as-is (it runs yt-dlp); the transcript path
+    # comes back on run.sh's TRANSCRIPT: line since the stem is the video title.
+    if [[ "$rel" == http://* || "$rel" == https://* ]]; then
+      name="$rel" rel_txt=""
+      if "$RUN_SH" "$rel" 2>&1 | tee "$log"; then rc=0; else rc=$?; fi
+      if [ "$rc" -eq 0 ]; then
+        txt=$(sed -n 's/^TRANSCRIPT: //p' "$log" | tail -n1)
+        if [ -n "$txt" ] && [ -f "$txt" ]; then
+          name=$(basename "${txt%.txt}")
+          rel_txt="${txt#"$OUTPUT_DIR"/}"
+        fi
+      fi
+      if [ -n "$rel_txt" ]; then
+        rm -f "$log"
+        _cache_url "$rel" "$rel_txt"
+        records+=("$(printf '%s\t%s\t%s\t' "$i" "$name" "$rel_txt")")
+      else
+        records+=("$(printf '%s\t%s\t\t%s' "$i" "$name" "$(_fail_reason "$rc" "$log")")")
+      fi
+      continue
+    fi
+
     name=$(basename "$rel")
     stem="${name%.*}"
     txt="$OUTPUT_DIR/$stem/$stem.txt"
-    log="$JOBS_DIR/run.$id.$i.log"
-    echo "==> [$i] $rel"
-    # Keep run.sh's own output; on failure it is the only clue we have.
-    if "$RUN_SH" "$MEDIA_DIR/$rel" 2>&1 | tee "$log" && [ -f "$txt" ]; then
+    if "$RUN_SH" "$MEDIA_DIR/$rel" 2>&1 | tee "$log"; then rc=0; else rc=$?; fi
+    if [ "$rc" -eq 0 ] && [ -f "$txt" ]; then
       rm -f "$log"
       records+=("$(printf '%s\t%s\t%s\t' "$i" "$name" "$stem/$stem.txt")")
     else
-      records+=("$(printf '%s\t%s\t\t%s' "$i" "$name" "transcription failed (see $log)")")
+      records+=("$(printf '%s\t%s\t\t%s' "$i" "$name" "$(_fail_reason "$rc" "$log")")")
     fi
   done
 
