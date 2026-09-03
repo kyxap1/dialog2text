@@ -137,7 +137,7 @@ class BotApp:
             if item.index not in seen:
                 seen.add(item.index)
                 items.append(item)
-        lines = [f"batch of {len(items)} videos detected"]
+        lines = [f"batch of {len(items)} items detected"]
         lines += [
             f"Added [{n}/{len(items)}] {it.title or it.filename}"
             for n, it in enumerate(items, 1)
@@ -235,7 +235,7 @@ class BotApp:
             batch.add_media(youtube.video_url(v["id"]), title=v.get("title"))
             for v in videos
         ]
-        lines = [f"batch of {len(added)} videos detected"]
+        lines = [f"batch of {len(added)} items detected"]
         if total > self.cfg.playlist_max:
             lines.append(f"cut from {total} to {self.cfg.playlist_max} (PLAYLIST_MAX)")
         lines += [

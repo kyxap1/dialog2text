@@ -35,7 +35,7 @@ async def test_media_is_content_addressed_and_announced_once_per_burst(cfg):
     assert all(len(n.split(".")[0]) == 40 for n in names)  # sha1 stems
     assert e1.responses == []  # only the last event in the burst answers
     assert e2.responses == [
-        f"batch of 2 videos detected\nAdded [1/2] {names[0]}\nAdded [2/2] {names[1]}"
+        f"batch of 2 items detected\nAdded [1/2] {names[0]}\nAdded [2/2] {names[1]}"
     ]
 
 
@@ -52,7 +52,7 @@ async def test_duplicate_forward_announces_the_batch_size_not_the_forward_count(
 
     assert len(list(cfg.media_dir.glob("*.mp4"))) == 2
     assert len(app.batches[1].media) == 2
-    assert events[-1].responses[0].startswith("batch of 2 videos detected")
+    assert events[-1].responses[0].startswith("batch of 2 items detected")
     assert events[-1].responses[0].count("Added [") == 2
 
 
@@ -390,7 +390,7 @@ async def test_playlist_expands_into_titled_watch_urls_in_order(cfg):
     assert [m.title for m in b.media] == ["First", "Second"]
     assert ev.responses[0] == "expanding playlist…"
     assert ev.responses[-1] == (
-        "batch of 2 videos detected\nAdded [1/2] First\nAdded [2/2] Second"
+        "batch of 2 items detected\nAdded [1/2] First\nAdded [2/2] Second"
     )
 
 
