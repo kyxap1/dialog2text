@@ -8,6 +8,7 @@ once here.
 
 from __future__ import annotations
 
+import html
 import re
 
 # Telegram rejects a message over 4096 characters; leave room for the tags an
@@ -24,7 +25,9 @@ _LINK = re.compile(r"\[([^\]]+)\]\(([^)\s]+)\)")
 
 
 def _inline(text: str) -> str:
-    text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    # Quotes are escaped too: a link URL carrying one would otherwise close the
+    # href attribute and swallow the rest of the address.
+    text = html.escape(text)
     text = _CODE.sub(r"<code>\1</code>", text)
     text = _BOLD.sub(lambda m: f"<b>{m.group(1) or m.group(2)}</b>", text)
     text = _ITALIC.sub(r"<i>\1</i>", text)
@@ -41,7 +44,7 @@ def to_html(md: str) -> str:
             fenced = not fenced
             continue
         if fenced:
-            out.append(line.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+            out.append(html.escape(line))
             continue
         if _RULE.match(line):
             continue

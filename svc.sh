@@ -71,7 +71,10 @@ install() {
 
   echo "==> worker"
   _stop_worker
-  sed "s#REPO_PATH#$PWD#g" "bot/deploy/$LABEL.plist" > "$PLIST"
+  # & and \ are substitution operators in sed's replacement text, # is the
+  # delimiter here -- a repo path holding any of them would corrupt the plist.
+  repo_path=$(printf '%s' "$PWD" | sed 's/[&\\#]/\\&/g')
+  sed "s#REPO_PATH#$repo_path#g" "bot/deploy/$LABEL.plist" > "$PLIST"
   launchctl bootstrap "gui/$UID" "$PLIST"
 
   echo "==> bot"

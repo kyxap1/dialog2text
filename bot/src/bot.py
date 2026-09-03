@@ -117,7 +117,8 @@ class BotApp:
     # -- handlers ---------------------------------------------------------
 
     async def _reply(self, event, text: str) -> None:
-        # Every reply re-sends the keyboard so the /queue /go buttons stay put.
+        # Replies routed through here re-send the keyboard so the /queue /go
+        # buttons stay put; progress messages skip it to keep the chat quiet.
         await event.respond(text, buttons=KEYBOARD)
 
     async def on_start(self, event) -> None:

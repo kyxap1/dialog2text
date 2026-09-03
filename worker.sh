@@ -50,7 +50,7 @@ import json, os, sys
 result_file = sys.argv[1]
 results = []
 for record in sys.argv[2:]:
-    index, name, path, error = record.split("\t")
+    index, name, path, error = record.split("\t", 3)
     results.append({
         "index": int(index),
         "name": name,

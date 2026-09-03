@@ -23,6 +23,10 @@ def test_fenced_block_is_escaped_but_not_formatted():
     assert to_html("```\na * b < c\n```") == "<pre>\na * b &lt; c\n</pre>"
 
 
+def test_a_quote_in_a_url_cannot_close_the_href():
+    assert to_html('[x](https://a.dev/?q=")') == '<a href="https://a.dev/?q=&quot;">x</a>'
+
+
 def test_chunks_split_on_line_boundaries_and_respect_the_limit():
     text = "\n".join(f"line {i}" for i in range(100))
     parts = chunks(text, limit=50)
