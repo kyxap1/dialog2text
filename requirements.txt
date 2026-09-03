@@ -45,6 +45,7 @@ MarkupSafe==3.0.3
 matplotlib==3.11.1
 mdurl==0.1.2
 mlx==0.32.0
+mlx-lm==0.31.3
 mlx-metal==0.32.0
 mlx-whisper==0.4.3
 more-itertools==11.1.0
@@ -94,6 +95,7 @@ rich==15.0.0
 safetensors==0.8.0
 scikit-learn==1.9.0
 scipy==1.18.0
+sentencepiece==0.2.2
 setuptools==84.0.0
 shellingham==1.5.4
 six==1.17.0

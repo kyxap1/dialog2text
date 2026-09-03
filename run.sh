@@ -18,7 +18,8 @@ FORMAT=${FORMAT:-txt}
 CHUNK_DURATION=${CHUNK_DURATION:-180}
 OUTPUT_DIR=${OUTPUT_DIR:-output}
 HF_TOKEN=${HF_TOKEN:?}
-YOUTUBE_BROWSER=${YOUTUBE_BROWSER:-chrome}
+# Chrome's cookie DB needs a Keychain key the headless spool worker can't get.
+YOUTUBE_BROWSER=${YOUTUBE_BROWSER:-firefox}
 SHOW_RESULT=${SHOW_RESULT:-1}
 
 # Take 75% of what's currently free (not 75% of the machine), so the rest of
@@ -56,11 +57,19 @@ for arg in "${args[@]}"; do
       # Pull metadata only first. yt-dlp forces mp3 and names files <title>.mp3,
       # so we can spot an existing copy; re-download unless ffprobe confirms its
       # duration matches (a truncated file reads shorter).
-      mapfile -t meta < <($NICE .venv/bin/yt-dlp --remote-components ejs:github \
-        --simulate --no-warnings --print "%(filename)s" --print "%(duration)s" \
-        --cookies-from-browser "$YOUTUBE_BROWSER" -o "input/%(title)s.%(ext)s" "$token")
+      # A plain read loop, not mapfile: launchd starts the worker under macOS's
+      # own bash 3.2, which has no mapfile.
+      meta=()
+      while IFS= read -r meta_line; do meta+=("$meta_line"); done \
+        < <($NICE .venv/bin/yt-dlp --remote-components ejs:github \
+          --simulate --no-warnings --print "%(filename)s" --print "%(duration)s" \
+          --cookies-from-browser "$YOUTUBE_BROWSER" -o "input/%(title)s.%(ext)s" "$token")
+      # yt-dlp writes errors to stderr and nothing to stdout on failure (bad
+      # cookies, private video, network) -- turn that into a visible error.
+      [ "${#meta[@]}" -ge 2 ] || { echo "yt-dlp returned no metadata for $token" >&2; exit 1; }
       file="${meta[0]%.*}.mp3"
-      have=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$file" 2>/dev/null)
+      # No cached file yet is the normal case; don't let ffprobe's failure abort.
+      have=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$file" 2>/dev/null || true)
       if [[ -s "$file" ]] && awk -v h="${have:-0}" -v w="${meta[1]:-0}" 'BEGIN{exit !(h >= w - 2)}'; then
         echo "==> cached $file"
       else
@@ -111,6 +120,9 @@ for file in "${files[@]}"; do
   fi
 
   txt="$out/${name%.*}.txt"
+  # Machine-readable so the spool worker can find the transcript for a URL job,
+  # where the output stem is the video title and only known after yt-dlp runs.
+  echo "TRANSCRIPT: $txt"
   if [ "$SHOW_RESULT" = "1" ] && [ -f "$txt" ]; then
     echo "--- $txt ---"
     cat "$txt"

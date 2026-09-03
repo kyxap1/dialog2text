@@ -1,0 +1,7 @@
+tests
+*.md
+.env
+.env.example
+requirements-dev.txt
+__pycache__
+.pytest_cache

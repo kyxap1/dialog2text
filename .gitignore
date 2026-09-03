@@ -7,3 +7,10 @@ input/*
 models/
 output/*
 !output/.gitkeep
+jobs/*
+!jobs/.gitkeep
+media/*
+!media/.gitkeep
+bot/.env
+.pytest_cache/
+*.log
