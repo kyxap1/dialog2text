@@ -13,3 +13,4 @@ media/*
 !media/.gitkeep
 bot/.env
 .pytest_cache/
+*.log
