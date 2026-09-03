@@ -4,6 +4,9 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    # requirements.txt is a full pinned lockfile; routine version bumps are noise.
+    # 0 disables version-update PRs while security updates keep flowing.
+    open-pull-requests-limit: 0
     ignore:
       - dependency-name: "torch"
       - dependency-name: "torchaudio"
