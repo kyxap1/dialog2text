@@ -31,28 +31,28 @@ mounts.
 
 ## Setup
 
-1. **Config.** `cp bot/.env.example bot/.env` and fill it in:
-   - `TELEGRAM_BOT_TOKEN` — @BotFather → `/newbot`
-   - `ADMIN_USER_ID` — your numeric id (@userinfobot); only this user is served
-   - `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` — https://my.telegram.org → API
-     development tools (Telethon needs them even in bot-token mode)
-   - `LLM_PROVIDER` and its settings — see "LLM backend" below
+From the repo root (or double-click `bot.command`):
 
-2. **Host worker** (from the repo root):
+```bash
+./svc.sh install
+```
 
-   ```bash
-   sed "s#REPO_PATH#$PWD#g" bot/deploy/com.whisper-mlx.worker.plist \
-     > ~/Library/LaunchAgents/com.whisper-mlx.worker.plist
-   launchctl load ~/Library/LaunchAgents/com.whisper-mlx.worker.plist
-   ```
+It installs the host dependencies, puts the worker under launchd and brings the
+container up. Re-run it to restart both after changing the code or `bot/.env`;
+`./svc.sh uninstall` takes the service back out. Enable "Start Docker Desktop on
+login" so the bot comes back after a reboot.
 
-3. **The stack:**
+On a clean machine it stops once, having written `bot/.env` from the example:
+fill in the four values it lists and run it again.
 
-   ```bash
-   cd bot && docker compose up -d
-   ```
+- `TELEGRAM_BOT_TOKEN` — @BotFather → `/newbot`
+- `ALLOWED_USER_IDS` — comma/space-separated numeric ids (@userinfobot); only
+  these users are served, each gets its own batch
+- `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` — https://my.telegram.org → API
+  development tools (Telethon needs them even in bot-token mode)
 
-   Enable "Start Docker Desktop on login" so it comes back after a reboot.
+The LLM defaults to a local model; for a remote API edit `LLM_PROVIDER` and its
+settings afterwards — see "LLM backend" below.
 
 ## LLM backend
 

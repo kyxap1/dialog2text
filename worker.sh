@@ -10,6 +10,14 @@
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
+# launchd starts this with no shell environment, so the token lives in the same
+# .env run.sh reads: mlx-lm's model downloads are rate-limited without it.
+if [ -s .env ]; then
+  set -a
+  . ./.env
+  set +a
+fi
+
 JOBS_DIR=${JOBS_DIR:-jobs}
 MEDIA_DIR=${MEDIA_DIR:-media}
 OUTPUT_DIR=${OUTPUT_DIR:-output}

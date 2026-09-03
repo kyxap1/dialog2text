@@ -35,7 +35,7 @@ Language and speaker count are auto-detected by default ([configuration](#config
 
 **3. Run the installer:** double-click `install.command` in this folder.
 
-A Terminal window opens and installs everything. At the end it asks for the token — paste it and press Enter. Nothing shows up while you paste; that's on purpose.
+A Terminal window opens and installs everything. At the end it creates a file named `.env` next to these scripts; open it (press ⌘⇧. in Finder to see it) and paste the token after `HF_TOKEN=`.
 
 The whole step takes a few minutes. If macOS refuses to start the file ("unidentified developer"), right-click it → **Open** → **Open**.
 
@@ -98,7 +98,7 @@ SPEAKERS=3 LANGUAGE=en ./run.sh
 - **Messages about `libtorchcodec`, `Lightning automatically upgraded…`, or `No --hf_token provided`** — harmless, the transcription still runs. Only worry if the run stops early.
 - **"unidentified developer"** when double-clicking — right-click the file → **Open** → **Open**.
 - **`Nothing to do: the input/ folder is empty`** — the files were copied somewhere else; they must sit directly in `input`.
-- **The speaker model fails to download** — the token is missing or the model terms were not accepted. Redo setup step 2, then delete the `.env` file and run `install.command` again to enter a fresh token.
+- **The speaker model fails to download** — the token is missing or the model terms were not accepted. Redo setup step 2, then paste a fresh token into the `.env` file.
 - **Everybody is labelled `SPEAKER_00`** — the recording is mono-ish or the voices overlap heavily; try setting `SPEAKERS` to the real number of participants.
 - **Out of disk space** — the `models` folder and `~/.cache/huggingface` hold several GB; deleting them only means they get downloaded again.
 

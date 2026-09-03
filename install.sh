@@ -17,20 +17,18 @@ brew list python@3.12 >/dev/null 2>&1 || brew install python@3.12
 
 mkdir -p input output models
 
-if [ ! -f .env ]; then
-  echo
-  echo "Hugging Face token — needed once, to download the speaker-detection model."
-  echo "1) create a read token: https://huggingface.co/settings/tokens"
-  echo "2) accept the model terms: https://huggingface.co/pyannote/speaker-diarization-community-1"
-  # hidden input + umask 077: the token must never appear on screen or be world-readable
-  read -rsp "Paste the token here (nothing will show up) and press Enter: " token
-  echo
-  if [ -n "$token" ]; then
-    umask 077
-    printf 'HF_TOKEN=%s\n' "$token" > .env
-    echo "Token saved to .env — keep this file private."
+if [ ! -s .env ]; then
+  # The file, not the shell, is what a launchd-started worker sees; an already
+  # exported HF_TOKEN (direnv, CI) just gets written out. umask: mode 600, the
+  # token must never be world-readable.
+  (umask 077 && printf 'HF_TOKEN=%s\n' "${HF_TOKEN:-}" > .env)
+  if [ -n "${HF_TOKEN:-}" ]; then
+    echo "Wrote .env with the HF_TOKEN from this environment — keep the file private."
   else
-    echo "Skipped. Add HF_TOKEN=... to a file named .env later if diarization fails."
+    echo
+    echo "Put a Hugging Face token into .env — the speaker-detection model needs it:"
+    echo "1) create a read token: https://huggingface.co/settings/tokens"
+    echo "2) accept the model terms: https://huggingface.co/pyannote/speaker-diarization-community-1"
   fi
 fi
 

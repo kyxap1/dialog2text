@@ -1,16 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  Install:
-    sed "s#REPO_PATH#$PWD#g" bot/deploy/com.whisper-mlx.worker.plist \
-      > ~/Library/LaunchAgents/com.whisper-mlx.worker.plist
-    launchctl load ~/Library/LaunchAgents/com.whisper-mlx.worker.plist
-  Run this from the whisper-mlx repo root.
+  Template: ./svc.sh install substitutes REPO_PATH and copies this into
+  ~/Library/LaunchAgents/.
 -->
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>com.whisper-mlx.worker</string>
+  <string>pro.kyxap.whisper-mlx.worker</string>
   <key>ProgramArguments</key>
   <array>
     <string>/bin/bash</string>
