@@ -138,11 +138,15 @@ process_job() {
     return
   fi
 
-  local media=() records=()
-  [ -n "$media_raw" ] && mapfile -t media <<<"$media_raw"
+  # launchd runs this under /bin/bash, which is 3.2 on macOS: no mapfile, and
+  # an empty array expands to an unbound variable under set -u.
+  local media=() records=() line
+  if [ -n "$media_raw" ]; then
+    while IFS= read -r line; do media+=("$line"); done <<<"$media_raw"
+  fi
 
   local i=0 rc rel name stem txt rel_txt log
-  for rel in "${media[@]}"; do
+  for rel in ${media[@]+"${media[@]}"}; do
     i=$((i + 1))
     log="$JOBS_DIR/run.$id.$i.log"
     echo "==> [$i] $rel"
@@ -181,7 +185,7 @@ process_job() {
     fi
   done
 
-  _emit_result "$result" "${records[@]}"
+  _emit_result "$result" ${records[@]+"${records[@]}"}
   rm -f "$job"
 }
 

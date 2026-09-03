@@ -57,9 +57,13 @@ for arg in "${args[@]}"; do
       # Pull metadata only first. yt-dlp forces mp3 and names files <title>.mp3,
       # so we can spot an existing copy; re-download unless ffprobe confirms its
       # duration matches (a truncated file reads shorter).
-      mapfile -t meta < <($NICE .venv/bin/yt-dlp --remote-components ejs:github \
-        --simulate --no-warnings --print "%(filename)s" --print "%(duration)s" \
-        --cookies-from-browser "$YOUTUBE_BROWSER" -o "input/%(title)s.%(ext)s" "$token")
+      # A plain read loop, not mapfile: launchd starts the worker under macOS's
+      # own bash 3.2, which has no mapfile.
+      meta=()
+      while IFS= read -r meta_line; do meta+=("$meta_line"); done \
+        < <($NICE .venv/bin/yt-dlp --remote-components ejs:github \
+          --simulate --no-warnings --print "%(filename)s" --print "%(duration)s" \
+          --cookies-from-browser "$YOUTUBE_BROWSER" -o "input/%(title)s.%(ext)s" "$token")
       # yt-dlp writes errors to stderr and nothing to stdout on failure (bad
       # cookies, private video, network) -- turn that into a visible error.
       [ "${#meta[@]}" -ge 2 ] || { echo "yt-dlp returned no metadata for $token" >&2; exit 1; }
