@@ -7,8 +7,8 @@ cd "$(dirname "${BASH_SOURCE[0]}")"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-mkdir -p "$tmp/jobs" "$tmp/media/77" "$tmp/output"
-: >"$tmp/media/77/a.mp4"
+mkdir -p "$tmp/jobs" "$tmp/media" "$tmp/output"
+: >"$tmp/media/5_77_abc123def456.mp4"
 
 cat >"$tmp/fake-run.sh" <<'SH'
 #!/usr/bin/env bash
@@ -21,8 +21,8 @@ chmod +x "$tmp/fake-run.sh"
 export JOBS_DIR="$tmp/jobs" MEDIA_DIR="$tmp/media" OUTPUT_DIR="$tmp/output"
 export RUN_SH="$tmp/fake-run.sh" PY="${PY:-.venv/bin/python}"
 
-printf '{"media": ["77/a.mp4"]}'          >"$tmp/jobs/20260101T000000-aaaaaaaa.job.json"
-printf 'not json'                         >"$tmp/jobs/20260101T000001-bbbbbbbb.job.json"
+printf '{"media": ["5_77_abc123def456.mp4"]}' >"$tmp/jobs/20260101T000000-aaaaaaaa.job.json"
+printf 'not json'                            >"$tmp/jobs/20260101T000001-bbbbbbbb.job.json"
 
 # shellcheck source=worker.sh
 source ./worker.sh
@@ -36,7 +36,8 @@ results = sorted(glob.glob(os.path.join(jobs_dir, "*.result.json")))
 assert len(results) == 2, results
 
 good = json.load(open(results[0]))["results"]
-assert good == [{"index": 1, "name": "a.mp4", "transcript_path": "a/a.txt", "error": None}], good
+assert good == [{"index": 1, "name": "5_77_abc123def456.mp4",
+                 "transcript_path": "5_77_abc123def456/5_77_abc123def456.txt", "error": None}], good
 
 bad = json.load(open(results[1]))["results"]
 assert bad[0]["transcript_path"] is None and bad[0]["error"], bad

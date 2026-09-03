@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 @dataclass
 class MediaItem:
     index: int
+    # Content-addressed name on disk ("5_78_a1b2c3d4e5f6.ogg") or a source URL.
     filename: str
     transcript_path: str | None = None
 

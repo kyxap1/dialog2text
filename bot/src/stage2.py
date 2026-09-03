@@ -17,7 +17,7 @@ def build_transcript_text(media: list[MediaItem], output_dir: Path) -> str:
         if not item.transcript_path:
             continue
         text = (output_dir / item.transcript_path).read_text().strip()
-        blocks.append(f"=== [{item.index}] {Path(item.filename).stem} ===\n{text}")
+        blocks.append(f"=== [{item.index}] {item.filename} ===\n{text}")
     return "\n\n".join(blocks)
 
 

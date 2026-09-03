@@ -4,10 +4,16 @@ from src.config import load_config
 
 BASE = {
     "TELEGRAM_BOT_TOKEN": "t",
-    "ADMIN_USER_ID": "1",
+    "ALLOWED_USER_IDS": "1",
     "TELEGRAM_API_ID": "12345",
     "TELEGRAM_API_HASH": "h",
 }
+
+
+def test_allowed_user_ids_parses_a_comma_or_space_list(monkeypatch):
+    for k, v in {**BASE, "ALLOWED_USER_IDS": "111, 222 333", "LLM_PROVIDER": "local"}.items():
+        monkeypatch.setenv(k, v)
+    assert load_config().allowed_user_ids == frozenset({111, 222, 333})
 
 
 def test_remote_provider_requires_an_api_key(monkeypatch):

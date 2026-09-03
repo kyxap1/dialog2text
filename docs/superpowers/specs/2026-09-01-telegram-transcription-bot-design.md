@@ -9,7 +9,12 @@ unchanged and adds an LLM post-processing pass driven by a fixed metaprompt
 (spoken→written conversion, output format, structuring).
 
 The summary is iterated on in place: after the first result, any text message is
-a correction that re-runs the LLM pass over the already-transcribed batch.
+a correction that re-runs the LLM pass over the already-transcribed batch. The
+next forwarded file starts a fresh batch.
+
+A small whitelist of Telegram user ids may use the bot, each with an
+independent batch; the transcription worker and the LLM pass stay a single
+shared queue.
 
 The laptop is not always on. Telegram queues updates for up to 24h; the bot
 catches up on reconnect after a sleep/wake. A full container restart drops the
@@ -27,8 +32,9 @@ spool protocol below.
 
 ## Constraints and decisions
 
-- **Private, single user.** Only the author's Telegram user ID is served;
-  everything else is silently ignored.
+- **Private, whitelisted.** Only the ids in `ALLOWED_USER_IDS` are served;
+  everything else is silently ignored. Each sender has its own in-memory batch,
+  keyed by `sender_id`.
 - **Runs split across Docker and the host.** MLX — `whispermlx` /
   `parakeet-mlx`, and `vllm-metal` for the local LLM — needs Apple Metal, which
   Docker Desktop's Linux VM on macOS cannot reach. So **Stage 1 (transcription)
@@ -39,9 +45,12 @@ spool protocol below.
 - **Large files.** Forwarded videos exceed the 20 MB Bot API download limit, so
   the bot speaks MTProto via Telethon (bot-token auth) instead of the HTTP Bot
   API — a 2 GB download limit, and the bot chooses where each file lands on
-  disk. It saves them under `media/<message-id>/`, bind-mounted to the host so
-  the transcription worker reads the same tree. No `telegram-bot-api` server and
-  no bot token in any file path.
+  disk. It saves them flat as
+  `media/<sender-id>_<message-id>_<content-hash>.<ext>`, bind-mounted to the
+  host so the transcription worker reads the same tree. Telegram filenames are
+  unusable (any language, often absent), so the file is content-addressed;
+  `sender-id` + `message-id` keep the name unique per user. No `telegram-bot-api`
+  server and no bot token in any file path.
 - **MTProto, not webhook**: the laptop has no public endpoint and is
   intermittently online. Telethon reconnects itself across sleep/wake and
   restarts; while the laptop is off Telegram queues updates for ~24h.
@@ -79,10 +88,12 @@ spool protocol below.
    with its own Python dependencies. Telethon over MTProto, bot-token auth,
    `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` from my.telegram.org, in-memory
    session (re-auth on restart is instant). Responsibilities: whitelist check
-   (`sender_id` match, no entity resolution), downloading each forwarded file to
-   `media/<message-id>/`, batch state, command handlers (`/start`, `/go`
-   (= `/retry`), `/queue`, `/reset`), text-message routing (prompt vs
-   correction),
+   (`sender_id in ALLOWED_USER_IDS`, no entity resolution), downloading each
+   forwarded file to `media/<sender>_<msg>_<hash>.<ext>` (content-addressed;
+   the Telegram filename is discarded), per-sender batch
+   state, command handlers (`/start`, `/go` (= `/retry`), `/queue`, `/reset`),
+   text-message routing (prompt vs correction; a bare URL is rejected — links
+   are not wired to the worker yet),
    job queue — plus writing Stage 1 job files into the spool and waiting for
    their result files. Mounts (bind, relative to the repo root —
    `bot/docker-compose.yml` uses `../`): `media` (downloaded files, shared with
@@ -120,7 +131,7 @@ whisper-mlx/
   worker.sh                                host spool runner, under launchd
   jobs/                                    spool, shared: bot container ↔ host worker
   output/                                  run.sh transcripts, read by the bot container
-  media/                                   bind mount: files the bot downloads, per message id
+  media/                                   bind mount: files the bot downloads, <sender>_<msg>_<hash>.<ext>
   prompts/default.md                       metaprompt, read-only into the bot container
   bot/
     Dockerfile
@@ -137,7 +148,7 @@ contract is just the spool protocol) but adds a second clone and duplicated
 `jobs/`/`output/` paths for no gain at this size.
 
 Bot config, via `bot/.env` that Compose reads: `TELEGRAM_BOT_TOKEN`,
-`ADMIN_USER_ID`, `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, `LLM_PROVIDER`,
+`ALLOWED_USER_IDS`, `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, `LLM_PROVIDER`,
 `LLM_MODEL`, `LLM_BASE_URL`. A remote API also needs `LLM_API_KEY`; for
 `LLM_PROVIDER=local` no key is needed and `LLM_BASE_URL` points at the DMR
 endpoint on the host.
@@ -147,7 +158,7 @@ endpoint on the host.
 Filesystem only, no SSH, a single writer on each side.
 
 - **Job** — bot writes `jobs/<id>.job.json`:
-  `{ "media": ["<message-id>/file_123.mp4", ...] }`. Paths are relative to the
+  `{ "media": ["<sender>_<msg>_<hash>.mp4", ...] }`. Paths are relative to the
   `media/` root, so they resolve on both the bot container and the host.
 - **Claim** — the worker takes the lexically-oldest `*.job.json`. No lock file:
   there is one worker and it processes one job at a time.
@@ -165,8 +176,10 @@ Filesystem only, no SSH, a single writer on each side.
 ## Data flow
 
 ```
-forward video/audio       → bot downloads it to media/<message-id>/ → path appended to batch.media
+forward video/audio       → bot downloads it to media/<sender>_<msg>_<hash>.<ext> → path appended to batch.media
+                            (if the batch already has a summary, it is reset first)
 text, no output yet       → appended to batch.extra_prompt
+bare URL                  → rejected (links not wired to the worker yet)
 /go                       → write jobs/<id>.job.json; await jobs/<id>.result.json; then Stage 2. Batch is KEPT.
 text, output exists        → appended to batch.corrections, then Stage 2 re-runs (in-container, no spool)
 /reset                    → clear the batch
@@ -208,13 +221,16 @@ The result is sent as a `.md` document plus a short text preview.
 
 ### Batch state
 
-There is one batch (single user), held in memory:
+One batch per sender, held in memory in a `dict` keyed by `sender_id`:
 
-- `media`: list of `(index, filename, transcript_path | None)`, in forward order
+- `media`: list of `(index, filename, transcript_path | None)`, in forward
+  order. `filename` is the content-addressed on-disk name, shown as-is in status
+  lines and the stage-2 headings.
 - `extra_prompt`: text messages received before the first `/go`
 - `corrections`: text messages received after output exists, in order
 - `has_output`: whether stage 2 has produced a result — this is what makes a
-  text message a correction rather than a prompt addition
+  text message a correction rather than a prompt addition, and what makes the
+  next forwarded file reset the batch
 
 Corrections accumulate; every re-run applies all of them, so "fix A" and
 "fix B" compose instead of overwriting each other.
@@ -294,15 +310,20 @@ Deliberately cut. Each names what would bring it back.
   add when typing the commands gets annoying.
 - **Editing the metaprompt over Telegram** — it is a file in this repo on this
   laptop. Add only if editing it from a phone becomes a real need.
-- **Prompting on "new video while a batch has output"** — currently the video
-  just joins the batch; `/reset` first to start fresh. Add the "add to batch /
-  start new" question if that silently produces a wrong batch in practice.
+- **Choosing "add to batch / start new" when a video arrives after a summary** —
+  the bot just resets and starts fresh. Add the prompt if silently discarding
+  the old batch turns out to bite.
 - **Promoting a correction into `default.md`** — corrections are per-batch by
   design.
 - Transcript chunking / context-window management
 - Per-video summaries (only the combined summary is produced)
 - Returning raw per-video transcripts (only on a future flag)
-- Any non-author user, rate limiting, multi-tenant concerns
+- **YouTube / URL input** — `run.sh` already transcribes a `http(s)://` arg via
+  yt-dlp, but the spool protocol carries local file paths only. Wiring a URL
+  through the worker (and reporting back the title-derived output path) is a
+  separate change; for now the bot rejects a bare URL.
+- Rate limiting, open registration, real multi-tenant isolation — the whitelist
+  is a hand-maintained short list
 - **Keeping the local model resident / a configurable idle timeout** — DMR's
   built-in ~5 min unload is taken as-is. Revisit only if the reload delay on the
   first `/go` after idle becomes annoying in practice

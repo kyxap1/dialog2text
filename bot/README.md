@@ -2,7 +2,8 @@
 
 A personal Telegram bot that turns forwarded video/audio into one structured
 summary. Forward media, send `/go`, get a `.md` back. Any text message after
-that is a correction and re-runs the summary.
+that is a correction and re-runs the summary; the next forwarded file starts a
+fresh batch. Serves a small whitelist of user ids, each with its own batch.
 
 Design: [`../docs/superpowers/specs/2026-09-01-telegram-transcription-bot-design.md`](../docs/superpowers/specs/2026-09-01-telegram-transcription-bot-design.md).
 
@@ -22,8 +23,9 @@ Telegram ── MTProto ──> bot container ──> jobs/*.job.json ──> wo
                    LLM pass (Grok API │ local model) ──> summary.md
 ```
 
-The bot saves each forwarded file under `media/<message-id>/`; `media/`, `jobs/`
-and `output/` are shared with the host worker through bind mounts.
+The bot saves each forwarded file as `media/<sender-id>_<message-id>_<hash>.<ext>`;
+`media/`, `jobs/` and `output/` are shared with the host worker through bind
+mounts.
 
 ## Setup
 
@@ -102,7 +104,7 @@ Needs Docker Desktop 4.62+.
 
 | | |
 |---|---|
-| forward video/audio | added to the batch |
+| forward video/audio | added to the batch (the first one after a summary starts a fresh batch) |
 | text (before first summary) | added to the prompt |
 | `/go` | transcribe new items, then summarise; the batch is kept |
 | `/retry` | re-run transcription for items that failed |

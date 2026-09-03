@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
+import os
 from io import BytesIO
 from pathlib import Path
 
@@ -20,6 +22,15 @@ log = logging.getLogger("bot")
 
 PREVIEW_CHARS = 800
 
+
+def _sha1(path: Path) -> str:
+    h = hashlib.sha1()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
 # Shown under every reply; the buttons just send these commands as text.
 KEYBOARD = [
     [
@@ -31,14 +42,25 @@ KEYBOARD = [
 
 
 class BotApp:
-    """Holds the batch and the single job queue; methods are the handlers."""
+    """Holds the per-sender batches and the single job queue; methods are the handlers."""
 
     def __init__(self, cfg: Config, client: TelegramClient | None = None):
         self.cfg = cfg
         self.client = client
-        self.batch = Batch()
+        # One batch per sender; the host worker and the LLM stay a single queue.
+        self.batches: dict[int, Batch] = {}
         self.queue: asyncio.Queue = asyncio.Queue()
         self._queue_task: asyncio.Task | None = None
+
+    def _batch(self, event) -> Batch:
+        return self.batches.setdefault(event.sender_id, Batch())
+
+    def _batch_for_new_item(self, event) -> Batch:
+        # The first item added after a finished summary starts a fresh batch.
+        batch = self._batch(event)
+        if batch.has_output:
+            batch.reset()
+        return batch
 
     def start_queue(self) -> None:
         self._queue_task = asyncio.create_task(self._run_queue())
@@ -67,32 +89,36 @@ class BotApp:
         f = msg.file
         if f is None:
             return
-        name = f.name or f"{msg.id}{f.ext or ''}"
-        # Per-message subdir keeps the media path token-free and unique; the
-        # basename stays clean for the status lines and stage-2 headings.
-        # ponytail: two forwards with the same filename collide in output/;
-        # prefix the name with msg.id if that ever bites.
-        dest = self.cfg.media_dir / str(msg.id) / name
-        dest.parent.mkdir(parents=True, exist_ok=True)
+        # A forwarded album drops photos in alongside the clip; the mime type is
+        # in the update already, so skip non-media silently before downloading.
+        if not (f.mime_type or "").startswith(("audio/", "video/")):
+            return
+        self.cfg.media_dir.mkdir(parents=True, exist_ok=True)
+        tmp = self.cfg.media_dir / f".{event.sender_id}_{msg.id}.part"
         try:
-            await msg.download_media(file=str(dest))
+            await msg.download_media(file=str(tmp))
         except Exception as exc:  # a 2 GB download can fail mid-stream
             log.exception("download failed")
+            tmp.unlink(missing_ok=True)
             await self._reply(event, f"Download failed: {exc}")
             return
-        item = self.batch.add_media(f"{msg.id}/{name}")
+        # Telegram filenames are unusable (any language, often absent), so the
+        # file is content-addressed. sender+msg keep the name unique per user.
+        name = f"{event.sender_id}_{msg.id}_{_sha1(tmp)[:12]}{f.ext or ''}"
+        os.replace(tmp, self.cfg.media_dir / name)
+        item = self._batch_for_new_item(event).add_media(name)
         await self._reply(event, f"Added [{item.index}] {name}")
 
     async def on_queue(self, event) -> None:
-        await self._reply(event, self._batch_lines())
+        await self._reply(event, self._batch_lines(self._batch(event)))
 
-    def _batch_lines(self) -> str:
-        if not self.batch.media:
+    def _batch_lines(self, batch: Batch) -> str:
+        if not batch.media:
             return "Batch is empty."
         return "\n".join(
-            f"[{m.index}] {Path(m.filename).name} — "
+            f"[{m.index}] {m.filename} — "
             + ("transcribed" if m.transcript_path else "pending")
-            for m in self.batch.media
+            for m in batch.media
         )
 
     async def on_text(self, event) -> None:
@@ -112,13 +138,14 @@ class BotApp:
         await self._reply(event, f"Queued (position {position}).")
 
     async def on_reset(self, event) -> None:
-        self.batch.reset()
+        self._batch(event).reset()
         await self._reply(event, "Batch cleared.")
 
     # -- jobs -----------------------------------------------------------
 
     async def _go_job(self, event) -> None:
-        pending = self.batch.untranscribed()
+        batch = self._batch(event)
+        pending = batch.untranscribed()
         if pending:
             job_id = new_job_id()
             write_job(self.cfg.jobs_dir, job_id, [m.filename for m in pending])
@@ -128,7 +155,7 @@ class BotApp:
             results = await await_result(
                 self.cfg.jobs_dir, job_id, self.cfg.result_poll_seconds
             )
-            self.batch.merge_results(results)
+            batch.merge_results(results)
             lines = []
             for result in results:
                 ok = bool(result.get("transcript_path"))
@@ -136,17 +163,18 @@ class BotApp:
                 lines.append(f"[{result['index']}] {result['name']} — {mark}")
             await event.respond("Stage 1:\n" + "\n".join(lines))
 
-        if not self.batch.media:
+        if not batch.media:
             await event.respond("Batch is empty.")
             return
-        if all(m.transcript_path is None for m in self.batch.media):
+        if all(m.transcript_path is None for m in batch.media):
             await event.respond("Every item failed transcription. /go retries.")
             return
         await self._stage2_job(event)
 
     async def _stage2_job(self, event) -> None:
-        text = build_transcript_text(self.batch.media, self.cfg.output_dir)
-        system = build_system_prompt(self.cfg.metaprompt_path, self.batch)
+        batch = self._batch(event)
+        text = build_transcript_text(batch.media, self.cfg.output_dir)
+        system = build_system_prompt(self.cfg.metaprompt_path, batch)
         try:
             summary = await asyncio.to_thread(
                 llm.run_prompt,
@@ -164,7 +192,7 @@ class BotApp:
                 f"LLM error: {exc}\nSent the raw transcripts; re-send the correction to retry."
             )
             return
-        self.batch.has_output = True
+        batch.has_output = True
         await self._send_document(event, "summary.md", summary)
         await event.respond(summary[:PREVIEW_CHARS])
 
@@ -180,7 +208,7 @@ def build_client(cfg: Config) -> tuple[TelegramClient, BotApp]:
     # missed-while-down messages ever matter.
     client = TelegramClient(MemorySession(), cfg.api_id, cfg.api_hash)
     state = BotApp(cfg, client)
-    mine = lambda e: e.sender_id == cfg.admin_user_id  # noqa: E731
+    mine = lambda e: e.sender_id in cfg.allowed_user_ids  # noqa: E731
 
     handlers = [
         (state.on_start, events.NewMessage(pattern=r"^/start$", func=mine)),

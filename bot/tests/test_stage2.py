@@ -14,8 +14,8 @@ def test_transcript_text_has_index_and_name_headings(tmp_path):
     b.media[1].transcript_path = "2/2.txt"
     text = build_transcript_text(b.media, tmp_path)
     assert text == (
-        "=== [1] call one ===\n[SPEAKER_00]: hi\n\n"
-        "=== [2] call two ===\n[SPEAKER_01]: yo"
+        "=== [1] call one.mp4 ===\n[SPEAKER_00]: hi\n\n"
+        "=== [2] call two.mp4 ===\n[SPEAKER_01]: yo"
     )
 
 
@@ -26,7 +26,7 @@ def test_transcript_text_skips_untranscribed_items(tmp_path):
     b.add_media("a.mp4")
     b.add_media("b.mp4")
     b.media[0].transcript_path = "1/1.txt"
-    assert build_transcript_text(b.media, tmp_path) == "=== [1] a ===\nok"
+    assert build_transcript_text(b.media, tmp_path) == "=== [1] a.mp4 ===\nok"
 
 
 def test_system_prompt_is_metaprompt_then_extra_then_corrections_in_order(tmp_path):

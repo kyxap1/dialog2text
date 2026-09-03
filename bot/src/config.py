@@ -29,10 +29,15 @@ def _env_bool(name: str, default: bool) -> bool:
     return value.strip().lower() not in ("0", "false", "no", "off", "")
 
 
+def _user_ids(raw: str) -> frozenset[int]:
+    return frozenset(int(x) for x in raw.replace(",", " ").split())
+
+
 @dataclass(frozen=True)
 class Config:
     bot_token: str
-    admin_user_id: int
+    # Numeric Telegram ids allowed to use the bot; every other sender is ignored.
+    allowed_user_ids: frozenset[int]
     # my.telegram.org credentials; Telethon needs them even in bot-token mode.
     api_id: int
     api_hash: str
@@ -55,7 +60,7 @@ def load_config() -> Config:
     provider = env.get("LLM_PROVIDER", "local")
     return Config(
         bot_token=_require("TELEGRAM_BOT_TOKEN"),
-        admin_user_id=int(_require("ADMIN_USER_ID")),
+        allowed_user_ids=_user_ids(_require("ALLOWED_USER_IDS")),
         api_id=int(_require("TELEGRAM_API_ID")),
         api_hash=_require("TELEGRAM_API_HASH"),
         media_dir=Path(env.get("MEDIA_DIR", "/app/media")),

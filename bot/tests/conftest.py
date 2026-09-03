@@ -6,9 +6,10 @@ from src.config import Config
 
 
 class FakeFile:
-    def __init__(self, name="x.mp4", ext=".mp4"):
+    def __init__(self, name="x.mp4", ext=".mp4", mime_type="video/mp4"):
         self.name = name
         self.ext = ext
+        self.mime_type = mime_type
 
 
 class FakeClient:
@@ -51,7 +52,7 @@ def cfg(tmp_path: Path) -> Config:
     metaprompt.write_text("BASE PROMPT")
     return Config(
         bot_token="t",
-        admin_user_id=1,
+        allowed_user_ids=frozenset({1}),
         api_id=1,
         api_hash="h",
         media_dir=tmp_path / "media",
