@@ -20,7 +20,7 @@ Telegram ── MTProto ──> bot container ──> jobs/*.job.json ──> wo
                             │                                       │
                             │ <──────────── jobs/*.result.json <─────┘
                             ▼
-                   LLM pass ──> summary.md
+                   LLM pass ──> <name>.summary.md
                      ├── Grok API, called from the container
                      └── local model: jobs/*.llm.json ──> worker.sh ──> mlx-lm
 ```

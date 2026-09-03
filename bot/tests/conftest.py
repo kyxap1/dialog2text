@@ -42,7 +42,7 @@ class FakeEvent:
         self.chat_id = chat_id
         self.responses: list[str] = []
 
-    async def respond(self, text, buttons=None):
+    async def respond(self, text, buttons=None, parse_mode=None):
         self.responses.append(text)
 
 

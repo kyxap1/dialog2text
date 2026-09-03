@@ -96,7 +96,7 @@ async def test_cached_youtube_transcript_skips_the_worker(cfg, monkeypatch):
 
     assert not cfg.jobs_dir.exists() or not list(cfg.jobs_dir.iterdir())
     assert app.batches[1].media[0].transcript_path == "vid/vid.txt"
-    assert ev.client.files == [(42, "summary.md")]
+    assert ev.client.files == [(42, "vid.summary.md")]
 
 
 async def test_url_inside_a_sentence_stays_a_correction(cfg):
@@ -162,7 +162,7 @@ async def test_correction_reruns_stage2_only_no_job_file_no_stage1(cfg, monkeypa
 
     assert calls["text"] == "=== [1] 1_1_x.mp4 ===\n[SPEAKER_00]: hi"
     assert "fix the intro" in calls["system"]
-    assert ev.client.files == [(42, "summary.md")]
+    assert ev.client.files == [(42, "1.summary.md")]
     assert b.has_output is True
     assert not cfg.jobs_dir.exists() or not list(cfg.jobs_dir.iterdir())
 
@@ -263,7 +263,7 @@ async def test_llm_error_sends_raw_transcripts_and_keeps_batch(cfg, monkeypatch)
     ev = _event()
     await app._stage2_job(ev)
 
-    assert ev.client.files == [(42, "transcripts.md")]
+    assert ev.client.files == [(42, "1.transcripts.md")]
     assert any("LLM error" in r for r in ev.responses)
     assert app.batches[1].media  # batch kept
 
@@ -320,4 +320,4 @@ async def test_go_writes_a_job_for_untranscribed_items_then_runs_stage2(cfg, mon
     await asyncio.gather(app._go_job(ev), fake_worker())
 
     assert app.batches[1].media[1].transcript_path == "b/b.txt"
-    assert ev.client.files == [(42, "summary.md")]
+    assert ev.client.files == [(42, "a.summary.md")]

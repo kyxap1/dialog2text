@@ -14,7 +14,7 @@ from urllib.parse import parse_qs, urlparse
 from telethon import Button, TelegramClient, events
 from telethon.sessions import MemorySession
 
-from . import llm, status
+from . import llm, status, tgmd
 from .batch import Batch
 from .config import Config
 from .spool import (
@@ -32,8 +32,13 @@ log = logging.getLogger("bot")
 def _gb(n: int) -> str:
     return f"{n / 1e9:.1f} GB"
 
-PREVIEW_CHARS = 800
 
+def _doc_name(batch: Batch, suffix: str) -> str:
+    """Name the document after the batch's first transcript, like the media is."""
+    stem = next(
+        (Path(m.transcript_path).stem for m in batch.media if m.transcript_path), "batch"
+    )
+    return f"{stem}.{suffix}.md"
 
 URL_CACHE_NAME = "url-cache.json"
 
@@ -300,15 +305,18 @@ class BotApp:
             summary = await self._run_llm(system, text)
         except llm.LLMError as exc:
             self.downloading = False
-            await self._send_document(event, "transcripts.md", text)
+            await self._send_document(event, _doc_name(batch, "transcripts"), text)
             await event.respond(
                 f"LLM error: {exc}\nSent the raw transcripts; re-send the correction to retry."
             )
             return
         self.downloading = False
         batch.has_output = True
-        await self._send_document(event, "summary.md", summary)
-        await event.respond(summary[:PREVIEW_CHARS])
+        await self._send_document(event, _doc_name(batch, "summary"), summary)
+        # The file is the artefact; the text is what gets read in the chat, so
+        # send all of it — Telegram caps a message, hence the split.
+        for part in tgmd.chunks(tgmd.to_html(summary)):
+            await event.respond(part, parse_mode="html")
 
     async def _send_document(self, event, filename: str, content: str) -> None:
         buf = BytesIO(content.encode())

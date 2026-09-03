@@ -214,7 +214,9 @@ summary = run_prompt(
 )
 ```
 
-The result is sent as a `.md` document plus a short text preview.
+The result is sent as a `.md` document, named after the batch's first
+transcript, plus the whole text as chat messages — converted to the HTML
+subset Telegram renders and split at the 4096-character limit.
 
 ### Batch state
 
