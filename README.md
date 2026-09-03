@@ -11,8 +11,6 @@ Everything runs locally on your Mac — nothing is uploaded anywhere.
 
 Language and speaker count are auto-detected by default ([configuration](#configuration) explains how to override them). YouTube URLs work too — paste one instead of a file.
 
-Русская версия: [README.ru.md](README.ru.md)
-
 ## What you need
 
 - A Mac with an Apple Silicon chip (M1 or newer).
