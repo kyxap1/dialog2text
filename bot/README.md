@@ -12,15 +12,17 @@ Design: [`../docs/superpowers/specs/2026-09-01-telegram-transcription-bot-design
 Transcription (`run.sh`, whisper-mlx + pyannote) needs Apple Metal, so it stays
 on the host. The bot runs under Docker Compose and talks to Telegram over
 MTProto (Telethon), which lifts the file-download limit to 2 GB. The LLM pass
-calls either a remote API (Grok) or a local model served on the host by Docker
-Model Runner — see "LLM backend" below.
+either calls a remote API (Grok) from the container or, for a local model, goes
+back to the host worker — MLX needs Metal too. See "LLM backend" below.
 
 ```
 Telegram ── MTProto ──> bot container ──> jobs/*.job.json ──> worker.sh (host) ──> run.sh
                             │                                       │
                             │ <──────────── jobs/*.result.json <─────┘
                             ▼
-                   LLM pass (Grok API │ local model) ──> summary.md
+                   LLM pass ──> summary.md
+                     ├── Grok API, called from the container
+                     └── local model: jobs/*.llm.json ──> worker.sh ──> mlx-lm
 ```
 
 The bot saves each forwarded file as `media/<sender-id>_<message-id>_<hash>.<ext>`;
@@ -68,37 +70,38 @@ Works with Grok or any OpenAI-compatible host (`LLM_BASE_URL`, `LLM_MODEL`,
    its *Billing* page before requests succeed. xAI has run promotional free
    monthly credits — confirm the current terms on the billing page yourself.
 4. **Model name**: check <https://docs.x.ai/docs/models> and set `LLM_MODEL`
-   (e.g. `grok-4`, `grok-3`, `grok-3-mini`). The `.env.example` default
-   (`grok-beta`) is a placeholder.
+   (e.g. `grok-4`, `grok-3`, `grok-3-mini`).
 5. Verify: `curl https://api.x.ai/v1/models -H "Authorization: Bearer $LLM_API_KEY"`.
 
 ### Local model (`LLM_PROVIDER=local`, no API key)
 
-Docker Model Runner serves an MLX model on the Metal GPU and unloads it ~5 min
-after the last request, so it only holds RAM around a `/go` or a correction.
-Needs Docker Desktop 4.62+.
+The bot writes `jobs/<id>.llm.json`; `worker.sh` runs the model with mlx-lm on
+the Metal GPU and writes the result back. Nothing serves the model between
+summaries — the weights are loaded per job (~10 s warm, ~30 s cold) and freed
+after. Docker on macOS passes no GPU through, which is why this runs host-side
+like transcription does.
 
-1. One-time host setup (the `hf.co/` prefix is required — without it Docker
-   looks on Docker Hub and the pull fails):
-
-   ```bash
-   docker model install-runner --backend vllm
-   docker model pull hf.co/mlx-community/Qwen3.8-27B-4bit
-   ```
-
-   `Qwen3.8-27B-4bit` is ~16 GB in RAM with a 262K context. For better quality
-   at ~28 GB use `hf.co/mlx-community/Qwen3.8-27B-8bit`. Browse
-   <https://huggingface.co/mlx-community>.
-
-2. In `bot/.env` (use the exact name from `docker model ls` for `LLM_MODEL`):
+1. In `bot/.env`:
 
    ```
    LLM_PROVIDER=local
-   LLM_BASE_URL=http://host.docker.internal:12434/engines/v1
-   LLM_MODEL=hf.co/mlx-community/Qwen3.8-27B-4bit
+   LLM_MODEL=mlx-community/Qwen3.8-27B-4bit
    ```
 
-3. Verify (from the host): `curl http://localhost:12434/engines/v1/models`.
+   `LLM_MODEL` is what mlx-lm loads: a Hugging Face repo id, downloaded into
+   `models/` on first use (`worker.sh` sets `HF_HUB_CACHE`), or a path on the
+   host. Nothing to provision by hand — the first summary pays the download.
+   This model needs ~16 GB of RAM while it runs; `-8bit` is ~28 GB. Browse
+   <https://huggingface.co/mlx-community>.
+
+2. Verify from the repo root:
+
+   ```bash
+   HF_HUB_CACHE=$PWD/models .venv/bin/mlx_lm.generate \
+     --model mlx-community/Qwen3.8-27B-4bit --prompt "Say ok" --max-tokens 16
+   ```
+
+`LLM_MAX_TOKENS` (default 8192) caps a summary's length; the worker reads it.
 
 ## Commands
 

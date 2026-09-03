@@ -42,8 +42,9 @@ def test_base_url_is_derived_from_provider_and_overridable(monkeypatch):
     monkeypatch.setenv("LLM_API_KEY", "k")
     assert load_config().llm_base_url == "https://api.x.ai/v1"
 
+    # "local" is served by the host worker, not over HTTP.
     monkeypatch.setenv("LLM_PROVIDER", "local")
-    assert load_config().llm_base_url == "http://host.docker.internal:12434/engines/v1"
+    assert load_config().llm_base_url == ""
 
     monkeypatch.setenv("LLM_BASE_URL", "http://my-host/v1")
     assert load_config().llm_base_url == "http://my-host/v1"

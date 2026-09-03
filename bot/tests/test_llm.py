@@ -25,15 +25,20 @@ def test_unknown_provider_is_rejected_before_any_network_call():
         run_prompt("s", "t", api_key="k", model="m", base_url="u", provider="claude")
 
 
-def test_local_provider_needs_no_key_and_uses_the_openai_compatible_path(monkeypatch):
+def test_local_provider_is_rejected_here_it_belongs_to_the_worker():
+    with pytest.raises(LLMError, match="unsupported LLM provider"):
+        run_prompt("s", "t", api_key="", model="m", base_url="u", provider="local")
+
+
+def test_keyless_host_still_gets_a_non_empty_key(monkeypatch):
     monkeypatch.setattr(llm, "OpenAI", _FakeClient)
     out = run_prompt(
-        "s", "t", api_key="", model="mlx-community/x",
-        base_url="http://h:12434/engines/v1", provider="local",
+        "s", "t", api_key="", model="some/model",
+        base_url="http://h:8080/v1", provider="grok",
     )
     assert out == "ok"
     assert _FakeClient.last["init"]["api_key"]  # SDK never gets an empty key
-    assert _FakeClient.last["call"]["model"] == "mlx-community/x"
+    assert _FakeClient.last["call"]["model"] == "some/model"
 
 
 def _run(monkeypatch, reply, **overrides):

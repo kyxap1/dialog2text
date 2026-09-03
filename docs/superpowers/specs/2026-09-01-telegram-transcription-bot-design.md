@@ -36,12 +36,12 @@ spool protocol below.
   everything else is silently ignored. Each sender has its own in-memory batch,
   keyed by `sender_id`.
 - **Runs split across Docker and the host.** MLX — `whispermlx` /
-  `parakeet-mlx`, and `vllm-metal` for the local LLM — needs Apple Metal, which
+  `parakeet-mlx`, and `mlx-lm` for the local LLM — needs Apple Metal, which
   Docker Desktop's Linux VM on macOS cannot reach. So **Stage 1 (transcription)
-  stays on the host**, run by `run.sh` exactly as today, and the local LLM
-  backend runs on the host too, as a Docker Model Runner service the bot reaches
-  over HTTP. The bot runs under Docker Compose. Transcription and the bot talk
-  through a shared `jobs/` spool directory on disk (protocol below).
+  stays on the host**, run by `run.sh` exactly as today, and **a local Stage 2
+  runs on the host too**, in the same worker. The bot runs under Docker Compose
+  and reaches both through a shared `jobs/` spool directory on disk (protocol
+  below).
 - **Large files.** Forwarded videos exceed the 20 MB Bot API download limit, so
   the bot speaks MTProto via Telethon (bot-token auth) instead of the HTTP Bot
   API — a 2 GB download limit, and the bot chooses where each file lands on
@@ -62,12 +62,10 @@ spool protocol below.
   - **Remote API** (`grok`, or any OpenAI-compatible host) — needs `LLM_API_KEY`.
     Grok (xAI, `api.x.ai`) is the reference; key and current pricing are
     confirmed at setup, not here.
-  - **Local, on-demand** (`local`) — Docker Model Runner with the `vllm-metal`
-    backend serves an MLX model on the host's Metal GPU over the same
-    OpenAI-compatible API, no key; `LLM_BASE_URL` points at
-    `host.docker.internal:12434/engines/v1`. DMR unloads the model after ~5 min
-    idle (built-in, not tunable), so it only holds RAM around an actual `/go` or
-    correction; the first request after idle pays a model-load delay.
+  - **Local, on-demand** (`local`) — no key and no server: the bot spools the
+    prompt to the host worker, which runs `mlx-lm` on the Metal GPU per job.
+    The weights are loaded and freed per summary (~10 s warm, ~30 s cold), so
+    nothing holds RAM between batches.
 - **Metaprompt lives in the repo** as a file, bind-mounted read-only into the
   bot container and loaded at runtime on every LLM pass. Its contents do not
   affect the design. It is edited in a text editor on the laptop, not over
@@ -104,23 +102,18 @@ spool protocol below.
    `jobs/*.job.json`, for each media path run `./run.sh <file>`, read
    `output/<name>/<name>.txt`, write `jobs/<id>.result.json`, delete the job
    file. `run.sh` and the Python pipeline are unchanged. One job at a time.
-3. **LLM client** — `run_prompt(system: str, text: str) -> str`, one
-   OpenAI-compatible implementation for both backends; `LLM_PROVIDER` picks
-   remote-API vs local. Runs inside the bot container; for `local` it calls the
-   Docker Model Runner endpoint Compose injects. Mockable for tests.
+3. **LLM client** — `run_prompt(system: str, text: str) -> str`, an
+   OpenAI-compatible call to a remote API, run inside the bot container.
+   `LLM_PROVIDER=local` bypasses it for the spool instead. Mockable for tests.
 4. **`prompts/default.md`** — the metaprompt, bind-mounted read-only into the
    bot container and read fresh on each LLM pass, so editing it on the host
    takes effect on the next correction without a restart.
 5. **launchd LaunchAgent** — starts `worker.sh` on login. The bot itself is now
    started by Docker Compose; enable "Start Docker Desktop on login" so the
    stack comes up after a reboot.
-6. **Docker Model Runner** (only when `LLM_PROVIDER=local`) — a host service
-   (Docker Desktop 4.62+) serving an MLX model on the Metal GPU over an
-   OpenAI-compatible API at `host.docker.internal:12434/engines/v1`. One-time
-   host setup: `docker model install-runner --backend vllm`, then
-   `docker model pull hf.co/mlx-community/…`. The bot points `LLM_BASE_URL` /
-   `LLM_MODEL` at it; DMR loads on first request and unloads ~5 min after the
-   last. Unused with a remote API.
+6. **Local Stage 2** (only when `LLM_PROVIDER=local`) — `worker.sh` picks up
+   `*.llm.json` and runs `mlx-lm` with `LLM_MODEL`, a Hugging Face repo id or a
+   host path. `LLM_MAX_TOKENS` (8192) caps the reply. Unused with a remote API.
 
 ## Deployment layout
 
@@ -150,8 +143,8 @@ contract is just the spool protocol) but adds a second clone and duplicated
 Bot config, via `bot/.env` that Compose reads: `TELEGRAM_BOT_TOKEN`,
 `ALLOWED_USER_IDS`, `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, `LLM_PROVIDER`,
 `LLM_MODEL`, `LLM_BASE_URL`. A remote API also needs `LLM_API_KEY`; for
-`LLM_PROVIDER=local` no key is needed and `LLM_BASE_URL` points at the DMR
-endpoint on the host.
+`LLM_PROVIDER=local` neither a key nor a base URL applies — `LLM_MODEL` is
+resolved by mlx-lm on the host.
 
 ### Spool protocol
 
@@ -160,8 +153,12 @@ Filesystem only, no SSH, a single writer on each side.
 - **Job** — bot writes `jobs/<id>.job.json`:
   `{ "media": ["<sender>_<msg>_<hash>.mp4", ...] }`. Paths are relative to the
   `media/` root, so they resolve on both the bot container and the host.
-- **Claim** — the worker takes the lexically-oldest `*.job.json`. No lock file:
-  there is one worker and it processes one job at a time.
+- **LLM job** (`LLM_PROVIDER=local`) — bot writes `jobs/<id>.llm.json`:
+  `{ "model": "...", "system": "...", "text": "..." }`; the worker replies in
+  the same `jobs/<id>.result.json` with `{ "summary": "..." }` or
+  `{ "error": "..." }`.
+- **Claim** — the worker takes the lexically-oldest job of either kind. No lock
+  file: there is one worker and it processes one job at a time.
 - **Result** — worker writes `jobs/<id>.result.json`:
   `{ "results": [ { "index": 1, "name": "...",
   "transcript_path": "<name>/<name>.txt" | null, "error": "..." | null }, ... ] }`.

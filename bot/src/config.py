@@ -14,12 +14,10 @@ def _require(name: str) -> str:
     return value
 
 
-# Each provider's endpoint. LLM_BASE_URL overrides it — the only reason to set
-# that is pointing "grok" at another OpenAI-compatible host.
-_PROVIDER_BASE_URL = {
-    "grok": "https://api.x.ai/v1",
-    "local": "http://host.docker.internal:12434/engines/v1",
-}
+# Each remote provider's endpoint. LLM_BASE_URL overrides it, to point at
+# another OpenAI-compatible host. "local" has none: it runs the model on the
+# host worker through the spool, not over HTTP.
+_PROVIDER_BASE_URL = {"grok": "https://api.x.ai/v1"}
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -68,11 +66,12 @@ def load_config() -> Config:
         output_dir=Path(env.get("OUTPUT_DIR", "/app/output")),
         metaprompt_path=Path(env.get("METAPROMPT_PATH", "/app/prompts/default.md")),
         llm_provider=provider,
-        # A local Docker Model Runner endpoint needs no key.
+        # A model running on the host needs no key.
         llm_api_key="" if provider == "local" else _require("LLM_API_KEY"),
+        # For "local" this is what mlx-lm loads: a Hugging Face repo id or a
+        # path on the host, not a name resolved here.
         llm_model=env.get("LLM_MODEL", "grok-beta"),
-        llm_base_url=env.get("LLM_BASE_URL")
-        or _PROVIDER_BASE_URL.get(provider, _PROVIDER_BASE_URL["local"]),
+        llm_base_url=env.get("LLM_BASE_URL") or _PROVIDER_BASE_URL.get(provider, ""),
         llm_strip_reasoning=_env_bool("LLM_STRIP_REASONING", True),
         result_poll_seconds=float(env.get("RESULT_POLL_SECONDS", "2")),
     )

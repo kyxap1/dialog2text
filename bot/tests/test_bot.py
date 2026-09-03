@@ -1,4 +1,6 @@
 import asyncio
+import json
+from dataclasses import replace
 
 import pytest
 
@@ -163,6 +165,36 @@ async def test_correction_reruns_stage2_only_no_job_file_no_stage1(cfg, monkeypa
     assert ev.client.files == [(42, "summary.md")]
     assert b.has_output is True
     assert not cfg.jobs_dir.exists() or not list(cfg.jobs_dir.iterdir())
+
+
+async def test_local_provider_hands_stage2_to_the_worker(cfg):
+    (cfg.output_dir / "1").mkdir(parents=True)
+    (cfg.output_dir / "1" / "1.txt").write_text("[SPEAKER_00]: hi")
+    app = BotApp(replace(cfg, llm_provider="local", llm_model="mlx-community/X"))
+    b = _batch(app)
+    b.add_media("1_1_x.mp4")
+    b.media[0].transcript_path = "1/1.txt"
+
+    job = {}
+
+    async def fake_worker():
+        while not (jobs := list(cfg.jobs_dir.glob("*.llm.json"))):
+            await asyncio.sleep(0.01)
+        job.update(json.loads(jobs[0].read_text()))
+        result = cfg.jobs_dir / jobs[0].name.replace(".llm.json", ".result.json")
+        result.write_text(json.dumps({"summary": "<think>hmm</think>SUMMARY"}))
+        jobs[0].unlink()
+
+    worker = asyncio.create_task(fake_worker())
+    ev = _event()
+    await app._stage2_job(ev)
+    await worker
+
+    assert job["model"] == "mlx-community/X"
+    assert job["text"] == "=== [1] 1_1_x.mp4 ===\n[SPEAKER_00]: hi"
+    assert "BASE PROMPT" in job["system"]
+    assert ev.responses == ["SUMMARY"]  # the reasoning block is stripped
+    assert not list(cfg.jobs_dir.iterdir())
 
 
 async def test_llm_error_sends_raw_transcripts_and_keeps_batch(cfg, monkeypatch):

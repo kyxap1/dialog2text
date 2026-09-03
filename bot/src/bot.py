@@ -15,7 +15,13 @@ from telethon.sessions import MemorySession
 from . import llm
 from .batch import Batch
 from .config import Config
-from .spool import await_result, new_job_id, write_job
+from .spool import (
+    await_llm_result,
+    await_result,
+    new_job_id,
+    write_job,
+    write_llm_job,
+)
 from .stage2 import build_system_prompt, build_transcript_text
 
 log = logging.getLogger("bot")
@@ -171,12 +177,11 @@ class BotApp:
             return
         await self._stage2_job(event)
 
-    async def _stage2_job(self, event) -> None:
-        batch = self._batch(event)
-        text = build_transcript_text(batch.media, self.cfg.output_dir)
-        system = build_system_prompt(self.cfg.metaprompt_path, batch)
-        try:
-            summary = await asyncio.to_thread(
+    async def _run_llm(self, system: str, text: str) -> str:
+        # A local model runs on the host GPU, so it goes through the same spool
+        # as transcription; only a remote API is callable from the container.
+        if self.cfg.llm_provider != "local":
+            return await asyncio.to_thread(
                 llm.run_prompt,
                 system,
                 text,
@@ -186,6 +191,24 @@ class BotApp:
                 provider=self.cfg.llm_provider,
                 strip_reasoning=self.cfg.llm_strip_reasoning,
             )
+        job_id = new_job_id()
+        write_llm_job(
+            self.cfg.jobs_dir, job_id, self.cfg.llm_model, system, text
+        )
+        result = await await_llm_result(
+            self.cfg.jobs_dir, job_id, self.cfg.result_poll_seconds
+        )
+        if result.get("error"):
+            raise llm.LLMError(result["error"])
+        summary = result["summary"]
+        return llm.strip_think(summary) if self.cfg.llm_strip_reasoning else summary
+
+    async def _stage2_job(self, event) -> None:
+        batch = self._batch(event)
+        text = build_transcript_text(batch.media, self.cfg.output_dir)
+        system = build_system_prompt(self.cfg.metaprompt_path, batch)
+        try:
+            summary = await self._run_llm(system, text)
         except llm.LLMError as exc:
             await self._send_document(event, "transcripts.md", text)
             await event.respond(
