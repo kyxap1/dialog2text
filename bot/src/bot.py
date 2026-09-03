@@ -67,11 +67,8 @@ def _sha1(path: Path) -> str:
 
 # Shown under every reply; the buttons just send these commands as text.
 KEYBOARD = [
-    [
-        Button.text("/queue", resize=True),
-        Button.text("/go", resize=True),
-        Button.text("/retry", resize=True),
-    ]
+    [Button.text("/queue", resize=True), Button.text("/go", resize=True)],
+    [Button.text("/retry", resize=True), Button.text("/reset", resize=True)],
 ]
 
 
@@ -198,16 +195,14 @@ class BotApp:
         if kind == "prompt":
             await self._reply(event, "Added to the prompt.")
             return
-        position = self.queue.qsize()
         await self.queue.put(lambda: self._stage2_job(event))
-        await self._reply(
-            event, f"Correction queued (position {position}); re-running the summary."
-        )
+        await self._reply(event, "Re-running the summary with your correction…")
 
     async def on_go(self, event) -> None:
-        position = self.queue.qsize()
+        ahead = self.queue.qsize()
         await self.queue.put(lambda: self._go_job(event))
-        await self._reply(event, f"Queued (position {position}).")
+        if ahead:
+            await self._reply(event, f"Queued behind {ahead} job(s).")
 
     async def on_reset(self, event) -> None:
         self._batch(event).reset()
@@ -236,24 +231,24 @@ class BotApp:
             job_id = new_job_id()
             write_job(self.cfg.jobs_dir, job_id, [m.filename for m in pending])
             await event.respond(
-                f"Transcribing {len(pending)} item(s) on the host worker; waiting…"
+                f"Transcribing {len(pending)} file(s) on the host worker…"
             )
             results = await await_result(
                 self.cfg.jobs_dir, job_id, self.cfg.result_poll_seconds
             )
             batch.merge_results(results)
-            lines = []
-            for result in results:
-                ok = bool(result.get("transcript_path"))
-                mark = "ok" if ok else f"FAILED ({result.get('error')})"
-                lines.append(f"[{result['index']}] {result['name']} — {mark}")
-            await event.respond("Stage 1:\n" + "\n".join(lines))
+            lines = [
+                f"[{r['index']}] {r['name']} — "
+                + ("ok" if r.get("transcript_path") else f"failed: {r.get('error')}")
+                for r in results
+            ]
+            await event.respond("Transcription:\n" + "\n".join(lines))
 
         if not batch.media:
-            await event.respond("Batch is empty.")
+            await event.respond("Batch is empty. Forward something first.")
             return
         if all(m.transcript_path is None for m in batch.media):
-            await event.respond("Every item failed transcription. /go retries.")
+            await event.respond("Every file failed. /go to retry, /reset to clear.")
             return
         if not pending:
             await event.respond("Re-running the summary…")

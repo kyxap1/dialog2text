@@ -237,12 +237,13 @@ so the cost is re-forwarding, not re-transcribing.
 
 ### Queue
 
-The bot keeps its single in-process `asyncio` queue for serializing `/go` jobs
-and Stage 2 re-runs. Stage 1 is executed by the host worker, which is itself
-strictly sequential, so there is still exactly one transcription running at a
-time — the transcription pipeline already caps itself at ~75% of free RAM/CPU.
-On `/go` the bot replies with queue position; it posts progress as each media
-item's result lands.
+The bot keeps a single in-process `asyncio` queue, shared across all senders,
+for serializing `/go` jobs and Stage 2 re-runs. Stage 1 is executed by the host
+worker, which is itself strictly sequential, so there is still exactly one
+transcription running at a time — the transcription pipeline already caps itself
+at ~75% of free RAM/CPU. On `/go` the bot replies only if a job is already
+ahead in the queue; it posts one line when transcription starts and one when it
+finishes.
 
 The queue also keeps Stage 1 and Stage 2 from overlapping, so transcription and
 a local LLM pass never run at the same moment. A just-used local model can still
