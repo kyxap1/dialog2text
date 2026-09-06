@@ -154,6 +154,67 @@ async def test_same_video_via_two_link_forms_is_one_item(cfg):
     assert "already in the batch" in dupe.responses[0]
 
 
+async def test_several_urls_in_one_message_each_become_a_media_item(cfg):
+    app = BotApp(cfg)
+    ev = _event(
+        "https://www.youtube.com/watch?v=aaa\n"
+        "https://youtu.be/bbb\n"
+        "https://www.youtube.com/watch?v=aaa"
+    )
+    await app.on_text(ev)
+
+    assert app.queue.empty()  # nothing runs until /go
+    assert [m.filename for m in app.batches[1].media] == [
+        "https://www.youtube.com/watch?v=aaa",
+        "https://www.youtube.com/watch?v=bbb",
+    ]
+    assert ev.responses == [
+        "batch of 2 items detected\n"
+        "[1] https://www.youtube.com/watch?v=aaa — added\n"
+        "[2] https://www.youtube.com/watch?v=bbb — added\n"
+        "/go to transcribe."
+    ]
+
+
+async def test_unusable_links_among_several_are_named_not_swallowed(cfg):
+    app = BotApp(cfg)
+    ev = _event(
+        "https://www.youtube.com/watch?v=aaa\n"
+        "https://haraba.ru/Links/851c28\n"
+        "https://www.youtube.com/playlist?list=PLabc"
+    )
+    await app.on_text(ev)
+
+    assert [m.filename for m in app.batches[1].media] == [
+        "https://www.youtube.com/watch?v=aaa"
+    ]
+    assert not app.batches[1].extra_prompt  # not filed away as prompt text
+    assert ev.responses == [
+        "batch of 1 items detected\n"
+        "[1] https://www.youtube.com/watch?v=aaa — added\n"
+        "https://haraba.ru/Links/851c28 — skipped: not a YouTube link\n"
+        "https://www.youtube.com/playlist?list=PLabc — skipped: send a playlist on its own\n"
+        "/go to transcribe."
+    ]
+
+
+async def test_a_message_of_only_unusable_links_leaves_the_batch_alone(cfg):
+    app = BotApp(cfg)
+    b = _batch(app)
+    b.add_media("old.mp4")
+    b.has_output = True
+
+    ev = _event("https://haraba.ru/a\nhttps://haraba.ru/b")
+    await app.on_text(ev)
+
+    assert [m.filename for m in b.media] == ["old.mp4"]  # no reset, no additions
+    assert b.has_output is True
+    assert ev.responses == [
+        "https://haraba.ru/a — skipped: not a YouTube link\n"
+        "https://haraba.ru/b — skipped: not a YouTube link"
+    ]
+
+
 async def test_cached_youtube_transcript_skips_the_worker(cfg, monkeypatch):
     (cfg.output_dir / "vid").mkdir(parents=True)
     (cfg.output_dir / "vid" / "vid.txt").write_text("[SPEAKER_00]: hi")

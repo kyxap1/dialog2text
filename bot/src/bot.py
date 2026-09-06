@@ -231,9 +231,14 @@ class BotApp:
 
     async def on_text(self, event) -> None:
         text = event.raw_text.strip()
-        # A lone URL is a transcription source, but only YouTube (run.sh feeds it
-        # to yt-dlp); a URL inside a sentence stays a prompt/correction.
-        if len(text.split()) == 1 and text.startswith(("http://", "https://")):
+        links = text.split()
+        # A message that is nothing but links is a list of transcription
+        # sources, but only YouTube ones (run.sh feeds them to yt-dlp); a URL
+        # inside a sentence stays a prompt/correction.
+        if links and all(l.startswith(("http://", "https://")) for l in links):
+            if len(links) > 1:
+                await self._add_links(event, links)
+                return
             kind = youtube.classify(text)
             if kind == "playlist":
                 await self._expand_playlist(event, text)
@@ -256,6 +261,43 @@ class BotApp:
             return
         await self.queue.put(lambda: self._stage2_job(event))
         await self._reply(event, "Re-running the summary…")
+
+    async def _add_links(self, event, links: list[str]) -> None:
+        """Several links in one message: every YouTube video becomes an item.
+
+        Expanding a playlist waits on the worker, so it stays a one-link path;
+        here it is named and skipped. The batch is only touched once at least
+        one video is found, so a message of unusable links resets nothing.
+        """
+        kinds = [(link, youtube.classify(link)) for link in links]
+        skipped = [
+            f"{link} — skipped: "
+            + ("send a playlist on its own" if kind == "playlist" else "not a YouTube link")
+            for link, kind in kinds
+            if kind != "video"
+        ]
+        videos = [link for link, kind in kinds if kind == "video"]
+        if not videos:
+            await self._reply(event, "\n".join(skipped))
+            return
+        batch = self._batch_for_new_item(event)
+        added, seen = [], set()
+        for link in videos:
+            url = youtube.video_url(youtube.video_id(link))
+            # Two link forms for one video are one item, so they are one line.
+            if url in seen:
+                continue
+            seen.add(url)
+            was = len(batch.media)
+            item = batch.add_media(url)
+            state = "added" if len(batch.media) != was else "already in the batch"
+            added.append(f"[{item.index}] {url} — {state}")
+        await self._reply(
+            event,
+            "\n".join(
+                [f"batch of {len(added)} items detected", *added, *skipped, "/go to transcribe."]
+            ),
+        )
 
     async def _expand_playlist(self, event, url: str) -> None:
         # The container has no yt-dlp/cookies, so enumeration is a worker job.
