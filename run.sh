@@ -20,7 +20,17 @@ OUTPUT_DIR=${OUTPUT_DIR:-output}
 HF_TOKEN=${HF_TOKEN:?}
 # Chrome's cookie DB needs a Keychain key the headless spool worker can't get.
 YOUTUBE_BROWSER=${YOUTUBE_BROWSER:-firefox}
+# A batch of links is downloaded in one pass, so yt-dlp waits a random
+# DOWNLOAD_SLEEP_MIN..MAX seconds before each one rather than hammering YouTube
+# at a machine-even rate. Set both to 0 to disable.
+DOWNLOAD_SLEEP_MIN=${DOWNLOAD_SLEEP_MIN:-5}
+DOWNLOAD_SLEEP_MAX=${DOWNLOAD_SLEEP_MAX:-30}
 SHOW_RESULT=${SHOW_RESULT:-1}
+
+# pyannote's torchcodec 0.7 is built against FFmpeg <=7; Homebrew's default
+# ffmpeg is newer, so its libav* don't match. ffmpeg@7 is keg-only -- point the
+# dynamic loader at it (a no-op when the formula isn't installed).
+export DYLD_FALLBACK_LIBRARY_PATH="/opt/homebrew/opt/ffmpeg@7/lib${DYLD_FALLBACK_LIBRARY_PATH:+:$DYLD_FALLBACK_LIBRARY_PATH}"
 
 # Take 75% of what's currently free (not 75% of the machine), so the rest of
 # the laptop stays usable while this runs. Override CPU_THREADS/MEM_LIMIT_BYTES
@@ -75,6 +85,8 @@ for arg in "${args[@]}"; do
       else
         echo "==> downloading $token"
         $NICE .venv/bin/yt-dlp --remote-components ejs:github -x --audio-format mp3 \
+          --sleep-requests 0.75 \
+          --sleep-interval "$DOWNLOAD_SLEEP_MIN" --max-sleep-interval "$DOWNLOAD_SLEEP_MAX" \
           --cookies-from-browser "$YOUTUBE_BROWSER" -o "input/%(title)s.%(ext)s" "$token"
       fi
       files+=("$file")
@@ -93,6 +105,13 @@ if [ "${#files[@]}" -eq 0 ]; then
   exit 1
 fi
 
+# The worker's prefetch pass: pull a whole batch here, spaced by the sleep
+# flags, then transcribe item by item in separate runs that hit these files.
+if [ -n "${DOWNLOAD_ONLY:-}" ]; then
+  echo "Downloaded ${#files[@]} file(s)."
+  exit 0
+fi
+
 # Empty LANGUAGE/SPEAKERS means auto-detect -- only pass the flags when set.
 language_args=()
 [ -n "$LANGUAGE" ] && language_args=(--language "$LANGUAGE")
@@ -101,7 +120,18 @@ speaker_args=()
 
 for file in "${files[@]}"; do
   name=$(basename "$file")
-  out="$OUTPUT_DIR/${name%.*}"
+  stem="${name%.*}"
+  out="$OUTPUT_DIR/$stem"
+  txt="$out/$stem.txt"
+  # A content-addressed media file (40-hex stem) already transcribed: the bytes
+  # can't have changed, so reuse it. A URL's stem is the video title, not a
+  # hash, so URLs still go through yt-dlp's duration check above.
+  if [ "${#stem}" -eq 40 ] && [[ "$stem" =~ ^[0-9a-f]+$ ]] && [ -f "$txt" ]; then
+    echo "==> cached transcript $txt"
+    echo "TRANSCRIPT: $txt"
+    if [ "$SHOW_RESULT" = "1" ]; then echo "--- $txt ---"; cat "$txt"; fi
+    continue
+  fi
   mkdir -p "$out"
   echo "==> $name"
   if [[ "$MODEL" == parakeet* ]]; then
@@ -119,7 +149,6 @@ for file in "${files[@]}"; do
       --diarize "${speaker_args[@]}"
   fi
 
-  txt="$out/${name%.*}.txt"
   # Machine-readable so the spool worker can find the transcript for a URL job,
   # where the output stem is the video title and only known after yt-dlp runs.
   echo "TRANSCRIPT: $txt"

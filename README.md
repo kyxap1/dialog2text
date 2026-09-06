@@ -11,8 +11,6 @@ Everything runs locally on your Mac — nothing is uploaded anywhere.
 
 Language and speaker count are auto-detected by default ([configuration](#configuration) explains how to override them). YouTube URLs work too — paste one instead of a file.
 
-Русская версия: [README.ru.md](README.ru.md)
-
 ## What you need
 
 - A Mac with an Apple Silicon chip (M1 or newer).
@@ -83,6 +81,9 @@ The settings live at the top of `run.sh` — open it in any text editor and chan
 | `CHUNK_DURATION`  | `180`          | Parakeet only: seconds of audio per encoder pass — lower it if long files run out of memory |
 | `OUTPUT_DIR`       | `output`       | where results are written                                      |
 | `YOUTUBE_BROWSER`  | `firefox`      | browser to read cookies from when downloading YouTube URLs      |
+| `DOWNLOAD_SLEEP_MIN` | `5`          | seconds yt-dlp waits before each download, minimum — a batch of links is pulled in one pass, so the pauses keep it from hammering YouTube |
+| `DOWNLOAD_SLEEP_MAX` | `30`         | the same, maximum: each pause is random between the two (set both to `0` to disable) |
+| `CACHE_MAX_GB`     | `100`          | `worker.sh` only: FIFO-trim `input/` + `media/` to this before each job (transcripts in `output/` are never evicted) |
 | `SHOW_RESULT`      | `1`            | print each transcript to the terminal when done                 |
 | `CPU_THREADS`      | *(auto)*       | CPU threads to use — auto-calculated as 75% of what's currently free |
 | `MEM_LIMIT_BYTES`  | *(auto)*       | memory cap for the models — auto-calculated as 75% of what's currently free |

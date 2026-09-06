@@ -20,16 +20,26 @@ class FakeClient:
         self.files.append((chat_id, getattr(file, "name", None)))
 
 
+class FakeDoc:
+    def __init__(self, doc_id):
+        self.id = doc_id
+
+
 class FakeMessage:
-    def __init__(self, text="", file=None, msg_id=1):
+    def __init__(self, text="", file=None, msg_id=1, content=b"fake", doc_id=None):
         self.raw_text = text
         self.file = file
         self.id = msg_id
         self.media = object() if file is not None else None
+        self.document = FakeDoc(doc_id) if doc_id is not None else None
+        # Bytes the fake download writes; distinct content -> distinct hash.
+        self._content = content
+        self.downloads = 0
 
     async def download_media(self, file):
+        self.downloads += 1
         Path(file).parent.mkdir(parents=True, exist_ok=True)
-        Path(file).write_bytes(b"fake")
+        Path(file).write_bytes(self._content)
         return file
 
 
@@ -67,4 +77,7 @@ def cfg(tmp_path: Path) -> Config:
         llm_strip_reasoning=True,
         llm_thinking=False,
         result_poll_seconds=0.01,
+        playlist_max=100,
+        expand_timeout_seconds=1.0,
+        debounce_seconds=0.01,
     )

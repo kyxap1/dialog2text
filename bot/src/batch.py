@@ -8,9 +8,11 @@ from dataclasses import dataclass, field
 @dataclass
 class MediaItem:
     index: int
-    # Content-addressed name on disk ("5_78_a1b2c3d4e5f6.ogg") or a source URL.
+    # Content-addressed name on disk ("<sha1>.ogg") or a source URL.
     filename: str
     transcript_path: str | None = None
+    # Human label for the announcement line; a playlist entry's video title.
+    title: str | None = None
 
 
 @dataclass
@@ -22,12 +24,12 @@ class Batch:
     # message into a correction rather than a prompt addition.
     has_output: bool = False
 
-    def add_media(self, filename: str) -> MediaItem:
+    def add_media(self, filename: str, title: str | None = None) -> MediaItem:
         # Same source twice in one batch (two links to one video) is one item.
         for existing in self.media:
             if existing.filename == filename:
                 return existing
-        item = MediaItem(index=len(self.media) + 1, filename=filename)
+        item = MediaItem(index=len(self.media) + 1, filename=filename, title=title)
         self.media.append(item)
         return item
 

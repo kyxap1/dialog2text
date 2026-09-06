@@ -9,6 +9,9 @@ if ! command -v brew >/dev/null; then
 fi
 
 brew list ffmpeg >/dev/null 2>&1 || brew install ffmpeg
+# pyannote's torchcodec 0.7 links FFmpeg <=7; keg-only so it coexists with the
+# current ffmpeg. run.sh points the loader at it.
+brew list ffmpeg@7 >/dev/null 2>&1 || brew install ffmpeg@7
 brew list python@3.12 >/dev/null 2>&1 || brew install python@3.12
 
 [ -d .venv ] || "$(brew --prefix python@3.12)/bin/python3.12" -m venv .venv
