@@ -12,6 +12,7 @@ mkdir -p "$tmp/jobs" "$tmp/media" "$tmp/input" "$tmp/output"
 
 cat >"$tmp/fake-run.sh" <<'SH'
 #!/usr/bin/env bash
+if [ -n "${DOWNLOAD_ONLY:-}" ]; then echo "$*" >>"$OUTPUT_DIR/prefetch.log"; exit 0; fi
 case "$1" in *FAIL*) echo "boom" >&2; exit 3;; esac
 name=$(basename "$1"); stem="${name%.*}"
 mkdir -p "$OUTPUT_DIR/$stem"
@@ -41,6 +42,8 @@ printf '{"model": "/nope", "system": "s", "text": "t"}' \
                                              >"$tmp/jobs/20260101T000004-eeeeeeee.llm.json"
 printf '{"url": "https://www.youtube.com/playlist?list=PLtest"}' \
                                              >"$tmp/jobs/20260101T000005-ffffffff.expand.json"
+printf '{"media": ["https://youtu.be/aa1", "https://youtu.be/bb2"]}' \
+                                             >"$tmp/jobs/20260101T000006-99999999.job.json"
 
 # shellcheck source=worker.sh
 source ./worker.sh
@@ -53,7 +56,7 @@ import glob, json, os, sys
 
 jobs_dir = sys.argv[1]
 results = sorted(glob.glob(os.path.join(jobs_dir, "*.result.json")))
-assert len(results) == 6, results
+assert len(results) == 7, results
 
 good = json.load(open(results[0]))["results"]
 assert good == [{"index": 1, "name": "5_77_abc123def456.mp4",
@@ -73,6 +76,13 @@ assert fail[0]["error"] == "run.sh exited 3: boom", fail
 llm = json.load(open(results[4]))
 assert "summary" not in llm and llm["error"], llm
 
+batch = json.load(open(results[6]))["results"]
+assert [r["name"] for r in batch] == ["aa1", "bb2"], batch
+assert all(r["error"] is None for r in batch), batch
+# One prefetch call carrying both links, not one call per link.
+prefetch = open(os.path.join(jobs_dir, "..", "output", "prefetch.log")).read().splitlines()
+assert prefetch == ["https://youtu.be/aa1 https://youtu.be/bb2"], prefetch
+
 exp = json.load(open(results[5]))
 assert exp["error"] is None, exp
 assert [v["id"] for v in exp["videos"]] == ["aaa", "bbb"], exp
@@ -81,6 +91,8 @@ assert exp["videos"][0]["title"] == "First video", exp
 cache = json.load(open(os.path.join(os.path.dirname(jobs_dir), "output", "transcript-cache.json")))
 assert cache == {
     "https://youtu.be/xY9": "xY9/xY9.txt",
+    "https://youtu.be/aa1": "aa1/aa1.txt",
+    "https://youtu.be/bb2": "bb2/bb2.txt",
     "5_77_abc123def456.mp4": "5_77_abc123def456/5_77_abc123def456.txt",
 }, cache
 

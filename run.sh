@@ -20,6 +20,11 @@ OUTPUT_DIR=${OUTPUT_DIR:-output}
 HF_TOKEN=${HF_TOKEN:?}
 # Chrome's cookie DB needs a Keychain key the headless spool worker can't get.
 YOUTUBE_BROWSER=${YOUTUBE_BROWSER:-firefox}
+# A batch of links is downloaded in one pass, so yt-dlp waits a random
+# DOWNLOAD_SLEEP_MIN..MAX seconds before each one rather than hammering YouTube
+# at a machine-even rate. Set both to 0 to disable.
+DOWNLOAD_SLEEP_MIN=${DOWNLOAD_SLEEP_MIN:-5}
+DOWNLOAD_SLEEP_MAX=${DOWNLOAD_SLEEP_MAX:-30}
 SHOW_RESULT=${SHOW_RESULT:-1}
 
 # pyannote's torchcodec 0.7 is built against FFmpeg <=7; Homebrew's default
@@ -80,6 +85,8 @@ for arg in "${args[@]}"; do
       else
         echo "==> downloading $token"
         $NICE .venv/bin/yt-dlp --remote-components ejs:github -x --audio-format mp3 \
+          --sleep-requests 0.75 \
+          --sleep-interval "$DOWNLOAD_SLEEP_MIN" --max-sleep-interval "$DOWNLOAD_SLEEP_MAX" \
           --cookies-from-browser "$YOUTUBE_BROWSER" -o "input/%(title)s.%(ext)s" "$token"
       fi
       files+=("$file")
@@ -96,6 +103,13 @@ done
 if [ "${#files[@]}" -eq 0 ]; then
   echo "Nothing to do: the input/ folder is empty. Copy your video or audio files there, or pass a URL."
   exit 1
+fi
+
+# The worker's prefetch pass: pull a whole batch here, spaced by the sleep
+# flags, then transcribe item by item in separate runs that hit these files.
+if [ -n "${DOWNLOAD_ONLY:-}" ]; then
+  echo "Downloaded ${#files[@]} file(s)."
+  exit 0
 fi
 
 # Empty LANGUAGE/SPEAKERS means auto-detect -- only pass the flags when set.

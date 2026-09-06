@@ -176,7 +176,20 @@ process_job() {
     while IFS= read -r line; do media+=("$line"); done <<<"$media_raw"
   fi
 
-  local i=0 rc rel name stem txt rel_txt log
+  # Download the whole batch first, in one foreground run.sh pass: yt-dlp's own
+  # sleep flags space the requests, which a link-at-a-time loop cannot do. The
+  # per-item runs below then find the files already on disk.
+  local urls=() rel
+  for rel in ${media[@]+"${media[@]}"}; do
+    case "$rel" in http://*|https://*) urls+=("$rel");; esac
+  done
+  if [ "${#urls[@]}" -gt 1 ]; then
+    # A dead link aborts the pass; the per-item runs still report it per link,
+    # so an incomplete prefetch is not a job failure.
+    DOWNLOAD_ONLY=1 "$RUN_SH" "${urls[@]}" || echo "prefetch incomplete; continuing" >&2
+  fi
+
+  local i=0 rc name stem txt rel_txt log
   for rel in ${media[@]+"${media[@]}"}; do
     i=$((i + 1))
     log="$JOBS_DIR/run.$id.$i.log"
