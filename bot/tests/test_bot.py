@@ -233,12 +233,42 @@ async def test_cached_youtube_transcript_skips_the_worker(cfg, monkeypatch):
     assert ev.client.files == [(42, "vid.summary.md")]
 
 
+async def test_instruction_after_summary_waits_for_go_and_survives_a_new_link(
+    cfg, monkeypatch
+):
+    calls: list = []
+    monkeypatch.setattr(
+        llm, "run_prompt", lambda system, text, **kw: calls.append((system, text)) or "S"
+    )
+
+    app = BotApp(cfg)
+    b = _batch(app)
+    b.add_media("old.mp4")
+    b.media[0].transcript_path = "old/old.txt"
+    b.has_output = True
+
+    await app.on_text(_event("просто перескажи видео"))  # correction, not run
+    assert app.queue.empty()
+    assert calls == []
+    assert b.corrections == ["просто перескажи видео"]
+
+    await app.on_text(_event("https://youtu.be/NEW"))  # new video, fresh batch
+
+    nb = app.batches[1]
+    assert [m.filename for m in nb.media] == ["https://www.youtube.com/watch?v=NEW"]
+    assert nb.extra_prompt == ["просто перескажи видео"]  # carried onto the new batch
+    assert nb.has_output is False
+    assert calls == []
+
+
 async def test_url_inside_a_sentence_stays_a_correction(cfg):
     app = BotApp(cfg)
     _batch(app).has_output = True
     ev = _event("fix the link to https://x.com/y")
     await app.on_text(ev)
-    assert app.queue.qsize() == 1
+    assert app.queue.empty()  # nothing runs until /go
+    assert app.batches[1].corrections == ["fix the link to https://x.com/y"]
+    assert not app.batches[1].media
 
 
 async def test_non_youtube_url_is_not_added_and_not_a_correction(cfg):
@@ -267,12 +297,65 @@ async def test_text_before_output_is_a_prompt_addition_and_queues_nothing(cfg):
     app = BotApp(cfg)
     ev = _event("use bullet points")
     await app.on_text(ev)
-    assert ev.responses == ["Added to the prompt."]
+    assert len(ev.responses) == 1
+    assert "/go" in ev.responses[0]
+    assert "use bullet points" in ev.responses[0]
+    assert "BASE PROMPT" not in ev.responses[0]  # metaprompt not echoed on every add
+    assert app.batches[1].extra_prompt == ["use bullet points"]
     assert app.queue.empty()
     assert not cfg.jobs_dir.exists() or not list(cfg.jobs_dir.iterdir())
 
 
-async def test_correction_reruns_stage2_only_no_job_file_no_stage1(cfg, monkeypatch):
+async def test_prompt_command_shows_the_compiled_system_prompt(cfg):
+    app = BotApp(cfg)
+    b = _batch(app)
+    b.add_text("focus on the compressor pedal")
+    b.has_output = True
+    b.add_text("keep it terse")
+    ev = _event()
+    await app.on_prompt(ev)
+    assert ev.responses == [
+        "BASE PROMPT\n\nfocus on the compressor pedal\n\nkeep it terse"
+    ]
+
+
+async def test_prompt_clear_drops_added_lines_but_keeps_the_transcripts(cfg):
+    app = BotApp(cfg)
+    b = _batch(app)
+    b.add_media("1.mp4")
+    b.media[0].transcript_path = "1/1.txt"
+    b.add_text("first pass instruction")
+    b.has_output = True
+    b.add_text("bad correction")
+
+    ev = _event("/prompt clear")
+    await app.on_prompt(ev)
+
+    assert b.extra_prompt == [] and b.corrections == []
+    assert [m.transcript_path for m in b.media] == ["1/1.txt"]
+    assert b.has_output is True
+    assert "cleared" in ev.responses[0].lower()
+
+
+async def test_reset_drops_queued_jobs_and_clears_the_prompt(cfg):
+    app = BotApp(cfg)
+    b = _batch(app)
+    b.add_media("1.mp4")
+    b.add_text("x")
+    b.has_output = True
+    await app.queue.put(lambda: None)
+    await app.queue.put(lambda: None)
+
+    ev = _event()
+    await app.on_reset(ev)
+
+    assert app.queue.empty()
+    assert b.media == [] and b.extra_prompt == [] and b.corrections == []
+    assert b.has_output is False
+    assert ev.responses == ["Batch and prompt cleared. 2 queued job(s) dropped."]
+
+
+async def test_correction_applies_on_the_next_go_stage2_only_no_stage1(cfg, monkeypatch):
     (cfg.output_dir / "1").mkdir(parents=True)
     (cfg.output_dir / "1" / "1.txt").write_text("[SPEAKER_00]: hi")
 
@@ -287,16 +370,15 @@ async def test_correction_reruns_stage2_only_no_job_file_no_stage1(cfg, monkeypa
         llm, "run_prompt", lambda system, text, **kw: calls.update(system=system, text=text) or "SUMMARY"
     )
 
-    ev = _event("fix the intro")
-    await app.on_text(ev)
-    assert app.queue.qsize() == 1
+    await app.on_text(_event("fix the intro"))
+    assert app.queue.empty()  # correction staged, not run
 
-    job = await app.queue.get()
-    await job()
+    go = _event()
+    await app._go_job(go)
 
     assert calls["text"] == "=== [1] 1_1_x.mp4 ===\n[SPEAKER_00]: hi"
     assert "fix the intro" in calls["system"]
-    assert ev.client.files == [(42, "1.summary.md")]
+    assert go.client.files == [(42, "1.summary.md")]
     assert b.has_output is True
     assert not cfg.jobs_dir.exists() or not list(cfg.jobs_dir.iterdir())
 

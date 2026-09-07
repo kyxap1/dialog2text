@@ -43,7 +43,11 @@ def _doc_name(batch: Batch, suffix: str) -> str:
 
 # Shown under every reply; the buttons just send these commands as text.
 KEYBOARD = [
-    [Button.text("/queue", resize=True), Button.text("/go", resize=True)],
+    [
+        Button.text("/queue", resize=True),
+        Button.text("/prompt", resize=True),
+        Button.text("/go", resize=True),
+    ],
     [Button.text("/retry", resize=True), Button.text("/reset", resize=True)],
 ]
 
@@ -81,10 +85,11 @@ class BotApp:
         return self.batches.setdefault(event.sender_id, Batch())
 
     def _batch_for_new_item(self, event) -> Batch:
-        # The first item added after a finished summary starts a fresh batch.
+        # The first item added after a finished summary starts a fresh batch,
+        # keeping any instruction just typed for this new item.
         batch = self._batch(event)
         if batch.has_output:
-            batch.reset()
+            batch.reset(keep_prompt=True)
         return batch
 
     def start_queue(self) -> None:
@@ -106,6 +111,14 @@ class BotApp:
         # Replies routed through here re-send the keyboard so the /queue /go
         # buttons stay put; progress messages skip it to keep the chat quiet.
         await event.respond(text, buttons=KEYBOARD)
+
+    async def _reply_long(self, event, text: str) -> None:
+        # The compiled prompt can outrun Telegram's message cap; only the last
+        # part carries the keyboard.
+        parts = tgmd.chunks(text)
+        for part in parts[:-1]:
+            await event.respond(part)
+        await self._reply(event, parts[-1])
 
     async def on_start(self, event) -> None:
         await self._reply(event, "Forward media, then /go.")
@@ -220,6 +233,21 @@ class BotApp:
     async def on_queue(self, event) -> None:
         await self._reply(event, self._batch_lines(self._batch(event)))
 
+    async def on_prompt(self, event) -> None:
+        # Bare: show the exact system prompt a /go (or a post-summary correction)
+        # would send — metaprompt + every prompt line + every correction.
+        # "/prompt clear": drop those added lines but keep the transcripts, so a
+        # bad instruction can be rewritten and re-summarised without a re-download.
+        batch = self._batch(event)
+        if event.raw_text.split()[1:2] == ["clear"]:
+            batch.extra_prompt.clear()
+            batch.corrections.clear()
+            await self._reply(event, "Prompt cleared. Transcripts kept — add lines, then /go.")
+            return
+        await self._reply_long(
+            event, build_system_prompt(self.cfg.metaprompt_path, batch)
+        )
+
     def _batch_lines(self, batch: Batch) -> str:
         if not batch.media:
             return "Batch is empty."
@@ -255,12 +283,19 @@ class BotApp:
             else:
                 await self._reply(event, f"[{item.index}] {url} — added\n/go to transcribe.")
             return
-        kind = self._batch(event).add_text(event.raw_text)
-        if kind == "prompt":
-            await self._reply(event, "Added to the prompt.")
-            return
-        await self.queue.put(lambda: self._stage2_job(event))
-        await self._reply(event, "Re-running the summary…")
+        # Any free-text message edits the prompt; nothing runs until /go. Before
+        # the first summary the line is a prompt addition, after it a correction
+        # — both feed build_system_prompt. The reply echoes only the additions,
+        # not the metaprompt; /prompt shows the whole thing.
+        batch = self._batch(event)
+        batch.add_text(event.raw_text)
+        run = "re-run" if batch.has_output else "run"
+        await self._reply_long(
+            event,
+            f"Prompt updated — /go to {run} the summary, /prompt to see it in full."
+            "\n\nOn top of the metaprompt:\n\n"
+            + "\n\n".join([*batch.extra_prompt, *batch.corrections]),
+        )
 
     async def _add_links(self, event, links: list[str]) -> None:
         """Several links in one message: every YouTube video becomes an item.
@@ -346,8 +381,17 @@ class BotApp:
             await self._reply(event, f"Queued behind {ahead} job(s).")
 
     async def on_reset(self, event) -> None:
+        # ponytail: the job queue is shared by every sender; a whitelist bot is
+        # one or two people, so /reset drops all queued work, not just this
+        # sender's. Per-sender queues if that ever bites.
+        dropped = 0
+        while not self.queue.empty():
+            self.queue.get_nowait()
+            self.queue.task_done()
+            dropped += 1
         self._batch(event).reset()
-        await self._reply(event, "Batch cleared.")
+        note = f" {dropped} queued job(s) dropped." if dropped else ""
+        await self._reply(event, "Batch and prompt cleared." + note)
 
     # -- jobs -----------------------------------------------------------
 
@@ -477,6 +521,7 @@ def build_client(cfg: Config) -> tuple[TelegramClient, BotApp]:
         # routes to /go — transcription is idempotent, /go re-runs only failures.
         (state.on_go, events.NewMessage(pattern=r"^/(go|retry)$", func=mine)),
         (state.on_queue, events.NewMessage(pattern=r"^/queue$", func=mine)),
+        (state.on_prompt, events.NewMessage(pattern=r"^/prompt(?:\s+clear)?$", func=mine)),
         (state.on_status, events.NewMessage(pattern=r"^/status$", func=mine)),
         (state.on_reset, events.NewMessage(pattern=r"^/reset$", func=mine)),
         (state.on_media, events.NewMessage(func=lambda e: mine(e) and e.message.file is not None)),

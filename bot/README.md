@@ -1,9 +1,10 @@
 # Telegram transcription bot
 
 A personal Telegram bot that turns forwarded video/audio into one structured
-summary. Forward media, send `/go`, get a `.md` back. Any text message after
-that is a correction and re-runs the summary; the next forwarded file starts a
-fresh batch. Serves a small whitelist of user ids, each with its own batch.
+summary. Forward media, send `/go`, get a `.md` back. Any text message is added
+to the prompt (a correction, once a summary exists); `/go` re-runs it. The next
+forwarded file starts a fresh batch, keeping the prompt you just typed. Serves a
+small whitelist of user ids, each with its own batch.
 
 Design: [`../docs/superpowers/specs/2026-09-01-telegram-transcription-bot-design.md`](../docs/superpowers/specs/2026-09-01-telegram-transcription-bot-design.md).
 
@@ -118,12 +119,13 @@ like transcription does.
 | forward video/audio | added to the batch (the first one after a summary starts a fresh batch); a burst is announced as one "batch of N" |
 | YouTube video link | added to the batch; a message of several links adds one item each, naming any it cannot use |
 | YouTube playlist link | every video (up to `PLAYLIST_MAX`, default 100) added as its own item; one combined summary |
-| text (before first summary) | added to the prompt |
-| `/go` | transcribe new items, then summarise; the batch is kept |
+| text | added to the prompt (a correction, once a summary exists); the reply echoes your added lines and waits for `/go` — nothing runs on its own |
+| `/prompt` | show the exact system prompt `/go` will send (metaprompt + your lines + corrections) |
+| `/prompt clear` | drop your added lines and corrections, keep the transcripts — rewrite a bad instruction, then `/go` |
+| `/go` | transcribe new items, then summarise (or just re-summarise if nothing is pending); the batch is kept |
 | `/retry` | re-run transcription for items that failed |
-| text (after a summary) | correction — re-runs the summary with all corrections so far |
 | `/status` | queued jobs, and how far a first-time model download got |
-| `/reset` | clear the batch, the prompt additions and the corrections |
+| `/reset` | clear the batch, the prompt and the corrections, and drop every queued job |
 
 ## Tests
 

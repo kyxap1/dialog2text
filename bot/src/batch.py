@@ -51,8 +51,13 @@ class Batch:
             if item is not None and result.get("transcript_path"):
                 item.transcript_path = result["transcript_path"]
 
-    def reset(self) -> None:
+    def reset(self, keep_prompt: bool = False) -> None:
+        # keep_prompt carries the accumulated instructions onto the next batch:
+        # a plain-text instruction typed just before a new source is meant for
+        # that source, not thrown away with the finished summary.
+        kept = [*self.extra_prompt, *self.corrections] if keep_prompt else []
         self.media.clear()
         self.extra_prompt.clear()
         self.corrections.clear()
+        self.extra_prompt.extend(kept)
         self.has_output = False
