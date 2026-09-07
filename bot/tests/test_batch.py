@@ -83,3 +83,14 @@ def test_reset_clears_everything():
     b.reset()
     assert b.media == [] and b.extra_prompt == [] and b.corrections == []
     assert b.has_output is False
+
+
+def test_reset_keep_prompt_carries_instructions_onto_the_next_batch():
+    b = Batch()
+    b.add_media("1.mp4")
+    b.add_text("use bullet points")
+    b.has_output = True
+    b.add_text("shorter")
+    b.reset(keep_prompt=True)
+    assert b.extra_prompt == ["use bullet points", "shorter"]
+    assert b.media == [] and b.corrections == [] and b.has_output is False
