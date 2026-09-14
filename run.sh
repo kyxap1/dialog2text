@@ -136,14 +136,12 @@ for file in "${files[@]}"; do
   echo "==> $name"
   if [[ "$MODEL" == parakeet* ]]; then
     $NICE .venv/bin/python parakeet_transcribe.py "$file" \
-      --hf_token "$HF_TOKEN" \
       --model "$MODEL" \
       --model_dir models --output_dir "$out" --output_format "$FORMAT" \
       --chunk_duration "$CHUNK_DURATION" \
       --diarize "${speaker_args[@]}"
   else
     $NICE .venv/bin/whispermlx "$file" \
-      --hf_token "$HF_TOKEN" \
       --model "$MODEL" "${language_args[@]}" \
       --model_dir models --output_dir "$out" --output_format "$FORMAT" \
       --diarize "${speaker_args[@]}"
