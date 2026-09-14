@@ -39,7 +39,8 @@ async def test_media_is_content_addressed_and_announced_once_per_burst(cfg):
     assert e1.responses == []  # only the last event in the burst answers
     assert e2.responses == [
         "Fetching 2 file(s) from Telegram…",
-        f"batch of 2 items detected\n[1/2] {names[0]} — new\n[2/2] {names[1]} — new",
+        f"batch of 2 items detected\n"
+        f"[1/2] {names[0]} — 0.0 MB — new\n[2/2] {names[1]} — 0.0 MB — new",
     ]
 
 
@@ -98,7 +99,7 @@ async def test_reforward_reuses_the_download_and_skips_the_ack(cfg):
 
     assert e2.message.downloads == 0
     assert [m.filename for m in app.batches[1].media] == [name]
-    assert e2.responses == ["batch of 1 items detected\n[1/1] " + name + " — on disk"]
+    assert e2.responses == ["batch of 1 items detected\n[1/1] " + name + " — 0.0 MB — on disk"]
 
 
 async def test_media_index_survives_a_restart(cfg):
@@ -117,7 +118,7 @@ async def test_media_index_survives_a_restart(cfg):
 
     assert e2.message.downloads == 0
     assert fresh.batches[1].media[0].filename == name
-    assert e2.responses == ["batch of 1 items detected\n[1/1] " + name + " — on disk"]
+    assert e2.responses == ["batch of 1 items detected\n[1/1] " + name + " — 0.0 MB — on disk"]
 
 
 async def test_forwarded_photo_is_skipped_by_mime(cfg):

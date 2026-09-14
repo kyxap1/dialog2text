@@ -33,6 +33,12 @@ def _gb(n: int) -> str:
     return f"{n / 1e9:.1f} GB"
 
 
+def _mb(path: Path) -> str:
+    # Telegram's own client shows file size in MB regardless of magnitude;
+    # matching that keeps the number comparable to what the user already saw.
+    return f"{path.stat().st_size / 1e6:.1f} MB"
+
+
 def _doc_name(batch: Batch, suffix: str) -> str:
     """Name the document after the batch's first transcript, like the media is."""
     stem = next(
@@ -232,7 +238,8 @@ class BotApp:
             return
         lines = [f"batch of {len(items)} items detected"]
         lines += [
-            f"[{n}/{len(items)}] {it.title or it.filename} — {state}"
+            f"[{n}/{len(items)}] {it.title or it.filename} — "
+            f"{_mb(self.cfg.media_dir / it.filename)} — {state}"
             for n, (it, state) in enumerate(items, 1)
         ]
         await self._reply(event, "\n".join(lines))
