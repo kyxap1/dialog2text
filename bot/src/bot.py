@@ -80,6 +80,11 @@ class BotApp:
         # Set while a summary waits on a model that was not on disk, so /status
         # knows to poll the download instead of hitting the HF API every time.
         self.downloading = False
+        # Per-sender chain of commit tasks: downloads race in parallel, but each
+        # commit awaits the previous one before touching the batch, so insertion
+        # order matches arrival order even when a later, smaller file downloads
+        # faster than an earlier, bigger one.
+        self._commit_chain: dict[int, asyncio.Task] = {}
 
     def _batch(self, event) -> Batch:
         return self.batches.setdefault(event.sender_id, Batch())
@@ -136,36 +141,56 @@ class BotApp:
         # debounce_seconds and split one forward into N "batch of 1" messages.
         doc = getattr(msg, "document", None)
         doc_id = str(doc.id) if doc is not None else None
-        task = asyncio.create_task(self._store_media(event, doc_id))
+        dl_task = asyncio.create_task(self._download_media(event, doc_id))
+        prev_commit = self._commit_chain.get(event.sender_id)
+        task = asyncio.create_task(self._commit_media(event, dl_task, prev_commit))
+        self._commit_chain[event.sender_id] = task
         self.accumulator.add(event.sender_id, (event, doc_id, task))
 
-    async def _store_media(self, event, doc_id: str | None) -> tuple[MediaItem, str] | None:
-        """Download the forward (unless this exact file is already on disk) and
-        add it to the batch. Returns (item, state) where state is "new" or
-        "on disk", or None on failure.
+    async def _download_media(self, event, doc_id: str | None) -> tuple[str, str] | None:
+        """Download the forward unless this exact file is already on disk.
+
+        Returns (name, state) where state is "new" or "on disk", or None on
+        failure. Does not touch the batch — see _commit_media for that.
         """
         msg = event.message
         known = self._media_names.get(doc_id) if doc_id is not None else None
         if known and (self.cfg.media_dir / known).exists():
-            name, state = known, "on disk"
-        else:
-            self.cfg.media_dir.mkdir(parents=True, exist_ok=True)
-            # content.store hashes the file and keeps this suffix for the name.
-            tmp = self.cfg.media_dir / f".tmp-{event.sender_id}-{msg.id}{msg.file.ext or ''}"
-            try:
-                await msg.download_media(file=str(tmp))
-            except Exception as exc:  # a 2 GB download can fail mid-stream
-                log.exception("download failed")
-                tmp.unlink(missing_ok=True)
-                await self._reply(event, f"Download failed: {exc}")
-                return None
-            # Telegram filenames are unusable; the on-disk name is the content
-            # hash, so the same clip forwarded twice is one file.
-            name, is_new = content.store(tmp, self.cfg.media_dir)
-            state = "new" if is_new else "on disk"
-            if doc_id is not None:
-                self._media_names[doc_id] = name
-                content.save_media_index(self.cfg.output_dir, self._media_names)
+            return known, "on disk"
+        self.cfg.media_dir.mkdir(parents=True, exist_ok=True)
+        # content.store hashes the file and keeps this suffix for the name.
+        tmp = self.cfg.media_dir / f".tmp-{event.sender_id}-{msg.id}{msg.file.ext or ''}"
+        try:
+            await msg.download_media(file=str(tmp))
+        except Exception as exc:  # a 2 GB download can fail mid-stream
+            log.exception("download failed")
+            tmp.unlink(missing_ok=True)
+            await self._reply(event, f"Download failed: {exc}")
+            return None
+        # Telegram filenames are unusable; the on-disk name is the content
+        # hash, so the same clip forwarded twice is one file.
+        name, is_new = content.store(tmp, self.cfg.media_dir)
+        state = "new" if is_new else "on disk"
+        if doc_id is not None:
+            self._media_names[doc_id] = name
+            content.save_media_index(self.cfg.output_dir, self._media_names)
+        return name, state
+
+    async def _commit_media(
+        self, event, dl_task: asyncio.Task, prev_commit: asyncio.Task | None
+    ) -> tuple[MediaItem, str] | None:
+        """Add a downloaded file to the batch, in arrival order.
+
+        Downloads run concurrently and a small file can finish before a bigger
+        one sent earlier, so insertion is serialized here behind the previous
+        arrival's commit rather than behind its own download.
+        """
+        if prev_commit is not None:
+            await asyncio.gather(prev_commit, return_exceptions=True)
+        result = await dl_task
+        if result is None:
+            return None
+        name, state = result
         return self._batch_for_new_item(event).add_media(name), state
 
     async def _announce_batch(self, sender_id, entries) -> None:

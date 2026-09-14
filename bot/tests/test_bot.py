@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 from dataclasses import replace
 
@@ -40,6 +41,29 @@ async def test_media_is_content_addressed_and_announced_once_per_burst(cfg):
         "Fetching 2 file(s) from Telegram…",
         f"batch of 2 items detected\n[1/2] {names[0]} — new\n[2/2] {names[1]} — new",
     ]
+
+
+async def test_batch_order_matches_arrival_not_download_speed(cfg):
+    app = BotApp(cfg)
+    e1 = _event(file=FakeFile(name="big.mp4"), msg_id=1, content=b"SLOW")  # sent first
+    e2 = _event(file=FakeFile(name="small.mp4"), msg_id=2, content=b"FAST")  # sent second
+
+    # e1 arrives first but its download finishes last — the race the fix covers.
+    orig_download = e1.message.download_media
+
+    async def slow_download(file):
+        await asyncio.sleep(0.05)
+        return await orig_download(file)
+
+    e1.message.download_media = slow_download
+
+    await app.on_media(e1)
+    await app.on_media(e2)
+    await asyncio.sleep(0.2)
+
+    names = [m.filename for m in app.batches[1].media]
+    assert names[0].startswith(hashlib.sha1(b"SLOW").hexdigest())
+    assert names[1].startswith(hashlib.sha1(b"FAST").hexdigest())
 
 
 async def test_duplicate_forward_announces_the_batch_size_not_the_forward_count(cfg):
