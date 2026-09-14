@@ -34,9 +34,8 @@ def _gb(n: int) -> str:
 
 
 def _mb(path: Path) -> str:
-    # Telegram's own client shows file size in MB regardless of magnitude;
-    # matching that keeps the number comparable to what the user already saw.
-    return f"{path.stat().st_size / 1e6:.1f} MB"
+    # Binary MB (divide by 1024**2), not decimal.
+    return f"{path.stat().st_size / 1024**2:.1f} MB"
 
 
 def _doc_name(batch: Batch, suffix: str) -> str:
