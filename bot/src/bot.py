@@ -38,6 +38,12 @@ def _mb(path: Path) -> str:
     return f"{path.stat().st_size / 1024**2:.1f} MB"
 
 
+def _size_prefix(media_dir: Path, filename: str) -> str:
+    # filename is a URL for a not-yet-downloaded link item; no size to show.
+    path = media_dir / filename
+    return f"{_mb(path)} — " if path.exists() else ""
+
+
 def _doc_name(batch: Batch, suffix: str) -> str:
     """Name the document after the batch's first transcript, like the media is."""
     stem = next(
@@ -238,7 +244,7 @@ class BotApp:
         lines = [f"batch of {len(items)} items detected"]
         lines += [
             f"[{n}/{len(items)}] {it.title or it.filename} — "
-            f"{_mb(self.cfg.media_dir / it.filename)} — {state}"
+            f"{_size_prefix(self.cfg.media_dir, it.filename)}{state}"
             for n, (it, state) in enumerate(items, 1)
         ]
         await self._reply(event, "\n".join(lines))
@@ -284,6 +290,7 @@ class BotApp:
             return "Batch is empty."
         return "\n".join(
             f"[{m.index}] {m.filename} — "
+            f"{_size_prefix(self.cfg.media_dir, m.filename)}"
             + ("transcribed" if m.transcript_path else "pending")
             for m in batch.media
         )
@@ -458,6 +465,7 @@ class BotApp:
             batch.merge_results(results)
             lines = [
                 f"[{r['index']}] {r['name']} — "
+                f"{_size_prefix(self.cfg.media_dir, r['name'])}"
                 + ("ok" if r.get("transcript_path") else f"failed: {r.get('error')}")
                 for r in results
             ]
