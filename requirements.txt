@@ -54,7 +54,7 @@ msgpack==1.2.1
 multidict==6.9.1
 narwhals==2.24.0
 networkx==3.6.1
-nltk==3.10.3
+nltk==3.10.4
 numba==0.67.0
 numpy==2.5.2
 omegaconf==2.3.1
